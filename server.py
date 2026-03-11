@@ -201,20 +201,14 @@ def get_file_tags(conn, file_id):
     ''', (file_id,)).fetchall()
     return [r['name'] for r in rows]
 
-@app.route('/api/files', methods=['GET'])
-def get_files():
-    search = request.args.get('q', '').strip()
-    folder_id = request.args.get('folder_id', '')
-    tag = request.args.get('tag', '').strip()
 
-    conn = get_db()
-    query = '''
-        SELECT f.*, folders.name as folder_name
-        FROM files f
-        LEFT JOIN folders ON f.folder_id = folders.id
-    '''
-    params = []
+def build_files_query(search, folder_id, tag):
+    """
+    Returns (where_clause, params) for the files query.
+    Shared by the paginated list and the count query.
+    """
     conditions = []
+    params = []
 
     if search:
         conditions.append('''(f.original_name LIKE ? OR f.id IN (
@@ -236,14 +230,58 @@ def get_files():
         )''')
         params.append(tag)
 
-    if conditions:
-        query += ' WHERE ' + ' AND '.join(conditions)
-    query += ' ORDER BY f.uploaded_at DESC'
+    where = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
+    return where, params
 
-    rows = conn.execute(query, params).fetchall()
+
+@app.route('/api/files', methods=['GET'])
+def get_files():
+    search    = request.args.get('q', '').strip()
+    folder_id = request.args.get('folder_id', '')
+    tag       = request.args.get('tag', '').strip()
+
+    # ── Pagination params ────────────────────────────────────────────────────
+    # limit=-1 means "return everything" (used internally by folder-detail view)
+    try:
+        limit = int(request.args.get('limit', 30))
+    except ValueError:
+        limit = 30
+    try:
+        offset = int(request.args.get('offset', 0))
+    except ValueError:
+        offset = 0
+
+    conn = get_db()
+    where, params = build_files_query(search, folder_id, tag)
+
+    # ── Total count (for the frontend to know when all pages are loaded) ─────
+    count_query = f'SELECT COUNT(*) as cnt FROM files f {where}'
+    total = conn.execute(count_query, params).fetchone()['cnt']
+
+    # ── Paginated data ───────────────────────────────────────────────────────
+    data_query = f'''
+        SELECT f.*, folders.name as folder_name
+        FROM files f
+        LEFT JOIN folders ON f.folder_id = folders.id
+        {where}
+        ORDER BY f.uploaded_at DESC
+    '''
+
+    if limit > 0:
+        data_query += ' LIMIT ? OFFSET ?'
+        rows = conn.execute(data_query, params + [limit, offset]).fetchall()
+    else:
+        # limit=-1: no pagination, return all (used by folder detail & move modal)
+        rows = conn.execute(data_query, params).fetchall()
+
     result = [file_to_dict(r, get_file_tags(conn, r['id'])) for r in rows]
     conn.close()
-    return jsonify(result)
+
+    # ── Response format ──────────────────────────────────────────────────────
+    # Always return { files, total } so the frontend can drive infinite scroll.
+    # When limit=-1 total equals len(files), which is correct.
+    return jsonify({'files': result, 'total': total})
+
 
 @app.route('/api/files/upload', methods=['POST'])
 def upload_file():
