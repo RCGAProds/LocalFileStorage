@@ -205,7 +205,7 @@
         border-color: var(--accent);
       }
 
-      /* Thumbnail in card */
+      /* Thumbnail */
       .file-thumb {
         width: 52px;
         height: 52px;
@@ -223,6 +223,31 @@
         height: 100%;
         object-fit: cover;
         border-radius: var(--radius-sm);
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .file-thumb img.loaded {
+        opacity: 1;
+      }
+
+      /* Skeleton shimmer for lazy thumbnails */
+      .file-thumb.skeleton {
+        background: linear-gradient(
+          90deg,
+          var(--surface2) 25%,
+          var(--border) 50%,
+          var(--surface2) 75%
+        );
+        background-size: 200% 100%;
+        animation: shimmer 1.4s infinite;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 200% 0;
+        }
+        100% {
+          background-position: -200% 0;
+        }
       }
 
       .file-info {
@@ -294,6 +319,50 @@
         background: rgba(74, 222, 128, 0.15);
         border-color: var(--green);
         color: var(--green);
+      }
+
+      /* ── Infinite scroll sentinel & loader ── */
+      #scroll-sentinel {
+        height: 1px;
+        width: 100%;
+      }
+      .load-more-indicator {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 20px;
+        color: var(--text3);
+        font-size: 12px;
+        font-family: 'DM Mono', monospace;
+      }
+      .load-more-indicator.visible {
+        display: flex;
+      }
+      .spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+        flex-shrink: 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .end-of-list {
+        text-align: center;
+        padding: 20px;
+        color: var(--text3);
+        font-size: 12px;
+        font-family: 'DM Mono', monospace;
+        display: none;
+      }
+      .end-of-list.visible {
+        display: block;
       }
 
       /* ── Empty ── */
@@ -843,7 +912,7 @@
         font-weight: 700;
       }
 
-      /* ── Grid view (files tab) ── */
+      /* ── Grid view ── */
       .files-grid.grid-view {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -964,7 +1033,7 @@
         background: rgba(124, 106, 255, 0.2);
       }
 
-      /* ── Detail grid view ── */
+      /* ── Detail view bar ── */
       .detail-view-bar {
         display: flex;
         align-items: center;
@@ -1160,12 +1229,15 @@
             ⊞
           </div>
         </div>
-        <div class="files-grid" id="files-list">
-          <div class="empty">
-            <div class="empty-icon">📭</div>
-            <p>No files yet</p>
-          </div>
+        <!-- Cards are appended here by JS — never wiped on new pages -->
+        <div class="files-grid" id="files-list"></div>
+        <!-- Watched by IntersectionObserver to trigger next page -->
+        <div id="scroll-sentinel"></div>
+        <div class="load-more-indicator" id="load-more-indicator">
+          <div class="spinner"></div>
+          <span>Loading more files...</span>
         </div>
+        <div class="end-of-list" id="end-of-list">— All files loaded —</div>
       </div>
 
       <!-- ═══ UPLOAD ═══ -->
@@ -1186,7 +1258,6 @@
           style="display: none"
           onchange="handleFileSelect(this.files)"
         />
-
         <div
           id="upload-previews-wrap"
           style="display: none; margin-bottom: 14px"
@@ -1194,7 +1265,6 @@
           <label>Preview</label>
           <div class="upload-previews" id="upload-previews"></div>
         </div>
-
         <div class="form-group">
           <label>Folder</label>
           <select id="upload-folder">
@@ -1228,7 +1298,6 @@
           </div>
           <div class="tag-suggestions" id="upload-tag-suggestions"></div>
         </div>
-
         <div class="upload-progress" id="upload-progress">
           <div class="progress-bar">
             <div class="progress-fill" id="progress-fill"></div>
@@ -1247,7 +1316,6 @@
 
       <!-- ═══ FOLDERS ═══ -->
       <div class="page" id="page-folders">
-        <!-- Main list -->
         <div id="folders-main">
           <div class="section-header">
             <div class="section-title">Folders</div>
@@ -1320,7 +1388,6 @@
           >
             ⬆️ Upload to this folder
           </div>
-          <!-- View selector bar -->
           <div class="detail-view-bar">
             <span>View</span>
             <div
@@ -1357,7 +1424,6 @@
           <div class="modal-title">Edit file</div>
           <div class="modal-close" onclick="closeModal('edit')">✕</div>
         </div>
-        <!-- Image preview inside edit modal -->
         <div
           class="edit-preview-wrap"
           id="edit-preview-wrap"
@@ -1470,9 +1536,15 @@
     <div class="toast" id="toast"></div>
 
     <script>
-      // ── State ─────────────────────────────────────────────────────
+      // ─────────────────────────────────────────────────────────────────────────
+      // PAGINATION CONFIG
+      // Number of files fetched per request on the main Files tab.
+      // ─────────────────────────────────────────────────────────────────────────
+      const PAGE_SIZE = 30;
+
+      // ── State ─────────────────────────────────────────────────────────────────
       let state = {
-        files: [],
+        files: [], // Accumulated pages for the Files tab
         folders: [],
         tags: [],
         filterFolder: null,
@@ -1484,7 +1556,14 @@
         editTags: [],
         selectedFiles: [],
         selectedFilePreviews: [],
+
+        // Pagination
+        currentPage: 0,
+        totalFiles: 0,
+        isFetching: false,
+        allLoaded: false,
       };
+
       let searchTimer;
       const IMAGE_TYPES = [
         'image/jpeg',
@@ -1494,18 +1573,69 @@
         'image/svg+xml',
         'image/bmp',
       ];
-
       function isImage(mime = '') {
         return IMAGE_TYPES.includes(mime);
       }
 
-      // ── Init ──────────────────────────────────────────────────────
+      // ── Lazy-image IntersectionObserver ──────────────────────────────────────
+      // Swaps data-src → src only when the <img> enters the viewport (+200 px).
+      const imgObserver = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const img = entry.target;
+            if (img.dataset.src) {
+              img.src = img.dataset.src;
+              img.removeAttribute('data-src');
+              img.addEventListener(
+                'load',
+                () => {
+                  img.classList.add('loaded');
+                  if (img.parentElement)
+                    img.parentElement.classList.remove('skeleton');
+                },
+                { once: true },
+              );
+              img.addEventListener(
+                'error',
+                () => {
+                  const icon = img.getAttribute('data-fallback') || '🖼️';
+                  if (img.parentElement) img.parentElement.innerHTML = icon;
+                },
+                { once: true },
+              );
+            }
+            imgObserver.unobserve(img);
+          });
+        },
+        { rootMargin: '200px' },
+      );
+
+      // ── Infinite-scroll IntersectionObserver ─────────────────────────────────
+      // Triggers fetchNextPage() when the sentinel div at the list bottom is visible.
+      // NOTE: we do NOT call .observe() here at startup. resetAndLoadFiles() disconnects
+      // it before each reset, and fetchNextPage() reconnects it after the first page
+      // has been appended — this prevents the double-fetch on initial load.
+      const scrollObserver = new IntersectionObserver(
+        (entries) => {
+          if (
+            entries[0].isIntersecting &&
+            !state.isFetching &&
+            !state.allLoaded
+          ) {
+            fetchNextPage();
+          }
+        },
+        { rootMargin: '300px' },
+      );
+
+      // ── Init ──────────────────────────────────────────────────────────────────
       async function init() {
         await Promise.all([loadFolders(), loadTags()]);
-        await loadFiles();
+        await resetAndLoadFiles();
       }
 
-      // ── API ───────────────────────────────────────────────────────
+      // ── API helper ────────────────────────────────────────────────────────────
       async function api(path, opts = {}) {
         const res = await fetch(path, opts);
         if (!res.ok) {
@@ -1515,7 +1645,7 @@
         return res.json();
       }
 
-      // ── Load data ─────────────────────────────────────────────────
+      // ── Data loaders ──────────────────────────────────────────────────────────
       async function loadFolders() {
         state.folders = await api('/api/folders');
         renderFolderChips();
@@ -1523,21 +1653,136 @@
         renderFoldersList();
         updateUnclassifiedCount();
       }
+
       async function loadTags() {
         state.tags = await api('/api/tags');
         renderTagChips();
       }
-      async function loadFiles() {
-        const p = new URLSearchParams();
-        if (state.searchQ) p.set('q', state.searchQ);
-        if (state.filterFolder === 'none') p.set('folder_id', 'none');
-        else if (state.filterFolder) p.set('folder_id', state.filterFolder);
-        if (state.filterTag) p.set('tag', state.filterTag);
-        state.files = await api('/api/files?' + p);
-        renderFiles();
+
+      // ── PAGINATION: reset to page 0 ───────────────────────────────────────────
+      // Called whenever filters, search, or data mutations occur.
+      async function resetAndLoadFiles() {
+        // Disconnect the scroll observer so it cannot fire while we are resetting.
+        // It will be re-attached by fetchNextPage() once the first page is rendered.
+        scrollObserver.unobserve(document.getElementById('scroll-sentinel'));
+
+        state.files = [];
+        state.currentPage = 0;
+        state.allLoaded = false;
+        state.isFetching = false;
+
+        document.getElementById('files-list').innerHTML = '';
+        document.getElementById('end-of-list').classList.remove('visible');
+        document
+          .getElementById('load-more-indicator')
+          .classList.remove('visible');
+        document.getElementById('file-count').textContent = '…';
+
+        await fetchNextPage();
       }
 
-      // ── Helpers ───────────────────────────────────────────────────
+      // ── PAGINATION: fetch one page and append ─────────────────────────────────
+      // Server must return { files: [...], total: N }
+      async function fetchNextPage() {
+        if (state.isFetching || state.allLoaded) return;
+        state.isFetching = true;
+
+        const indicator = document.getElementById('load-more-indicator');
+        indicator.classList.add('visible');
+
+        try {
+          const p = new URLSearchParams();
+          p.set('limit', PAGE_SIZE);
+          p.set('offset', state.currentPage * PAGE_SIZE);
+          if (state.searchQ) p.set('q', state.searchQ);
+          if (state.filterFolder === 'none') p.set('folder_id', 'none');
+          else if (state.filterFolder) p.set('folder_id', state.filterFolder);
+          if (state.filterTag) p.set('tag', state.filterTag);
+
+          const data = await api('/api/files?' + p);
+          const newFiles = data.files; // server always returns { files, total }
+          const total = data.total;
+
+          state.files = [...state.files, ...newFiles];
+          state.totalFiles = total;
+          state.currentPage += 1;
+
+          document.getElementById('file-count').textContent = total;
+
+          appendFileCards(newFiles);
+
+          // Re-attach the scroll observer now that real content is in the DOM.
+          // Doing this here (instead of at startup) guarantees the sentinel is
+          // below the fold on first load, so the observer fires only on genuine
+          // user scroll — never on the initial empty-page trigger.
+          if (!state.allLoaded) {
+            scrollObserver.observe(document.getElementById('scroll-sentinel'));
+          }
+
+          if (state.files.length >= total || newFiles.length < PAGE_SIZE) {
+            state.allLoaded = true;
+            if (total > 0)
+              document.getElementById('end-of-list').classList.add('visible');
+          }
+
+          if (state.files.length === 0) {
+            document.getElementById('files-list').innerHTML =
+              '<div class="empty"><div class="empty-icon">🔍</div><p>No files found</p></div>';
+          }
+        } catch (err) {
+          showToast('Error loading files', 'error');
+        } finally {
+          state.isFetching = false;
+          indicator.classList.remove('visible');
+        }
+      }
+
+      // ── Append new cards to the list (never wipes existing cards) ─────────────
+      function appendFileCards(files) {
+        const el = document.getElementById('files-list');
+        const fragment = document.createDocumentFragment();
+
+        files.forEach((f) => {
+          const card = document.createElement('div');
+          card.className = 'file-card';
+          card.onclick = () => openEdit(f.id);
+
+          if (isImage(f.mimetype)) {
+            card.innerHTML = `
+              <div class="file-thumb skeleton">
+                <img data-src="/api/files/${f.id}/preview"
+                     data-fallback="${fileIcon(f.mimetype)}" alt="" />
+              </div>
+              <div class="file-info">
+                <div class="file-name">${escHtml(f.original_name)}</div>
+                <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
+                ${f.folder_name ? `<div class="file-folder"><span>📁 ${escHtml(f.folder_name)}</span></div>` : ''}
+                ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
+              </div>
+              <div class="file-actions" onclick="event.stopPropagation()">
+                <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
+              </div>`;
+            imgObserver.observe(card.querySelector('img'));
+          } else {
+            card.innerHTML = `
+              <div class="file-thumb">${fileIcon(f.mimetype)}</div>
+              <div class="file-info">
+                <div class="file-name">${escHtml(f.original_name)}</div>
+                <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
+                ${f.folder_name ? `<div class="file-folder"><span>📁 ${escHtml(f.folder_name)}</span></div>` : ''}
+                ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
+              </div>
+              <div class="file-actions" onclick="event.stopPropagation()">
+                <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
+              </div>`;
+          }
+          fragment.appendChild(card);
+        });
+
+        el.appendChild(fragment);
+      }
+
+      // ── Helpers ───────────────────────────────────────────────────────────────
       function fileIcon(mime = '') {
         if (isImage(mime)) return '🖼️';
         if (mime.startsWith('video/')) return '🎬';
@@ -1556,7 +1801,7 @@
         return (b / 1048576).toFixed(1) + ' MB';
       }
       function fmtDate(d) {
-        return new Date(d).toLocaleDateString('es-ES', {
+        return new Date(d).toLocaleDateString('en-GB', {
           day: '2-digit',
           month: 'short',
           year: 'numeric',
@@ -1573,38 +1818,7 @@
         return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       }
 
-      // ── Render: files ─────────────────────────────────────────────
-      function renderFiles() {
-        const el = document.getElementById('files-list');
-        document.getElementById('file-count').textContent = state.files.length;
-        if (!state.files.length) {
-          el.innerHTML =
-            '<div class="empty"><div class="empty-icon">🔍</div><p>No se encontraron files</p></div>';
-          return;
-        }
-        el.innerHTML = state.files
-          .map((f) => {
-            const thumbHtml = isImage(f.mimetype)
-              ? `<div class="file-thumb"><img src="/api/files/${f.id}/preview" alt="" loading="lazy" onerror="this.parentNode.innerHTML='${fileIcon(f.mimetype)}'"></div>`
-              : `<div class="file-thumb">${fileIcon(f.mimetype)}</div>`;
-            return `
-    <div class="file-card" onclick="openEdit(${f.id})">
-      ${thumbHtml}
-      <div class="file-info">
-        <div class="file-name">${escHtml(f.original_name)}</div>
-        <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
-        ${f.folder_name ? `<div class="file-folder"><span>📁 ${escHtml(f.folder_name)}</span></div>` : ''}
-        ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
-      </div>
-      <div class="file-actions" onclick="event.stopPropagation()">
-        <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
-      </div>
-    </div>`;
-          })
-          .join('');
-      }
-
-      // ── Render: chips/selects ─────────────────────────────────────
+      // ── Render: chips / selects ───────────────────────────────────────────────
       function renderFolderChips() {
         document.getElementById('folder-chips').innerHTML = [
           `<div class="chip ${!state.filterFolder ? 'active' : ''}" onclick="setFolderFilter(null)">All</div>`,
@@ -1616,8 +1830,7 @@
         ].join('');
       }
       function renderTagChips() {
-        const el = document.getElementById('tag-chips');
-        el.innerHTML = state.tags
+        document.getElementById('tag-chips').innerHTML = state.tags
           .map(
             (t) =>
               `<div class="chip tag-chip ${state.filterTag === t.name ? 'active' : ''}" onclick="setTagFilter('${escJs(t.name)}')">#${escHtml(t.name)} <small style="opacity:.6">${t.count}</small></div>`,
@@ -1643,37 +1856,37 @@
         el.innerHTML = state.folders
           .map(
             (f) => `
-    <div class="folder-card" onclick="openFolderDetail(${f.id})" style="cursor:pointer;">
-      <div class="folder-card-icon">📁</div>
-      <div class="folder-card-info"><div class="folder-card-name">${escHtml(f.name)}</div></div>
-      <div class="folder-card-actions" onclick="event.stopPropagation()">
-        <div class="btn-sm" style="font-size:16px" onclick="openRenameFolder(${f.id},'${escJs(f.name)}')">✏️</div>
-        <div class="btn-sm" style="font-size:16px" onclick="deleteFolder(${f.id})">🗑️</div>
-      </div>
-      <div style="color:var(--text3);font-size:20px;margin-left:4px;">›</div>
-    </div>`,
+          <div class="folder-card" onclick="openFolderDetail(${f.id})" style="cursor:pointer">
+            <div class="folder-card-icon">📁</div>
+            <div class="folder-card-info"><div class="folder-card-name">${escHtml(f.name)}</div></div>
+            <div class="folder-card-actions" onclick="event.stopPropagation()">
+              <div class="btn-sm" style="font-size:16px" onclick="openRenameFolder(${f.id},'${escJs(f.name)}')">✏️</div>
+              <div class="btn-sm" style="font-size:16px" onclick="deleteFolder(${f.id})">🗑️</div>
+            </div>
+            <div style="color:var(--text3);font-size:20px;margin-left:4px">›</div>
+          </div>`,
           )
           .join('');
       }
 
-      // ── Filters ───────────────────────────────────────────────────
+      // ── Filters (always reset pagination) ────────────────────────────────────
       function setFolderFilter(id) {
         state.filterFolder = id;
         renderFolderChips();
-        loadFiles();
+        resetAndLoadFiles();
       }
       function setTagFilter(name) {
         state.filterTag = state.filterTag === name ? null : name;
         renderTagChips();
-        loadFiles();
+        resetAndLoadFiles();
       }
       function debounceSearch() {
         state.searchQ = document.getElementById('search-input').value;
         clearTimeout(searchTimer);
-        searchTimer = setTimeout(loadFiles, 300);
+        searchTimer = setTimeout(resetAndLoadFiles, 300);
       }
 
-      // ── Tags input ─────────────────────────────────────────────────
+      // ── Tags input ────────────────────────────────────────────────────────────
       function confirmTagInput(ctx) {
         const input = document.getElementById(ctx + '-tag-input');
         const val = input.value.trim();
@@ -1685,7 +1898,6 @@
         input.focus();
       }
       function handleTagInput(e, ctx) {
-        // keydown: handle backspace and desktop shortcuts
         const input = document.getElementById(ctx + '-tag-input');
         if ((e.key === 'Enter' || e.key === ',') && input.value.trim()) {
           e.preventDefault();
@@ -1696,7 +1908,6 @@
         }
       }
       function handleTagKeyup(e, ctx) {
-        // keyup fallback for mobile Enter (some Android keyboards only fire keyup)
         if (e.key === 'Enter' || e.keyCode === 13) {
           const input = document.getElementById(ctx + '-tag-input');
           if (input.value.trim()) {
@@ -1706,11 +1917,9 @@
         }
       }
       function handleTagOninput(e, ctx) {
-        // Detect comma typed on mobile (oninput fires reliably where onkeydown may not)
         const input = document.getElementById(ctx + '-tag-input');
         if (input.value.includes(',')) {
           const parts = input.value.split(',');
-          // Last part stays in input (might be start of next tag)
           parts.slice(0, -1).forEach((p) => {
             if (p.trim()) addTag(p.trim(), ctx);
           });
@@ -1764,32 +1973,27 @@
           .join('');
       }
 
-      // ── Upload with previews ──────────────────────────────────────
+      // ── Upload ────────────────────────────────────────────────────────────────
       function handleFileSelect(files) {
         state.selectedFiles = Array.from(files);
         state.selectedFilePreviews = [];
         const previewWrap = document.getElementById('upload-previews-wrap');
         const previewGrid = document.getElementById('upload-previews');
         const btn = document.getElementById('upload-btn');
-
         if (!state.selectedFiles.length) {
           previewWrap.style.display = 'none';
           btn.disabled = true;
           return;
         }
-
         btn.disabled = false;
         previewWrap.style.display = 'block';
         previewGrid.innerHTML = '';
-
         const dz = document.getElementById('drop-zone');
-        dz.innerHTML = `<div class="upload-zone-icon">✅</div><p>${state.selectedFiles.length} archivo(s) listo(s)</p><small>Toca para cambiar</small>`;
-
+        dz.innerHTML = `<div class="upload-zone-icon">✅</div><p>${state.selectedFiles.length} file(s) ready</p><small>Tap to change</small>`;
         state.selectedFiles.forEach((file, i) => {
           const item = document.createElement('div');
           item.className = 'up-prev-item';
           item.dataset.index = i;
-
           if (isImage(file.type)) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -1803,20 +2007,16 @@
           previewGrid.appendChild(item);
         });
       }
-
       function removeSelectedFile(index) {
         state.selectedFiles.splice(index, 1);
         state.selectedFilePreviews.splice(index, 1);
-        // Re-create FileList-like array and re-render
         const dt = new DataTransfer();
         state.selectedFiles.forEach((f) => dt.items.add(f));
         document.getElementById('file-input').files = dt.files;
         handleFileSelect(dt.files);
       }
-
       async function uploadFiles() {
         if (!state.selectedFiles.length) return;
-        // Flush any tag currently being typed (mobile users may not have confirmed it)
         confirmTagInput('upload');
         const btn = document.getElementById('upload-btn');
         const prog = document.getElementById('upload-progress');
@@ -1828,7 +2028,7 @@
         const tags = state.uploadTags.join(',');
         let done = 0;
         for (const file of state.selectedFiles) {
-          label.textContent = `Subiendo ${file.name}...`;
+          label.textContent = `Uploading ${file.name}…`;
           const fd = new FormData();
           fd.append('file', file);
           if (folderId) fd.append('folder_id', folderId);
@@ -1858,7 +2058,7 @@
             '<div class="upload-zone-icon">📤</div><p>Tap to select files</p><small>or drag and drop here</small>';
           btn.disabled = true;
         }, 1500);
-        await Promise.all([loadFiles(), loadTags()]);
+        await Promise.all([resetAndLoadFiles(), loadTags()]);
       }
 
       const dz = document.getElementById('drop-zone');
@@ -1873,7 +2073,7 @@
         handleFileSelect(e.dataTransfer.files);
       });
 
-      // ── Edit modal ────────────────────────────────────────────────
+      // ── Edit modal ────────────────────────────────────────────────────────────
       function openEdit(fileId) {
         const f = state.files.find((x) => x.id === fileId);
         if (!f) return;
@@ -1882,8 +2082,6 @@
         document.getElementById('edit-name').value = f.original_name;
         document.getElementById('edit-folder').value = f.folder_id || '';
         renderTagPills('edit');
-
-        // Show image preview if applicable
         const wrap = document.getElementById('edit-preview-wrap');
         const img = document.getElementById('edit-preview-img');
         if (isImage(f.mimetype)) {
@@ -1896,9 +2094,7 @@
         }
         openModal('edit');
       }
-
       async function saveEdit() {
-        // Flush any tag currently being typed
         confirmTagInput('edit');
         const name = document.getElementById('edit-name').value.trim();
         const folderId = document.getElementById('edit-folder').value || null;
@@ -1915,24 +2111,22 @@
           });
           closeModal('edit');
           showToast('Saved', 'success');
-          await Promise.all([loadFiles(), loadTags()]);
+          await Promise.all([resetAndLoadFiles(), loadTags()]);
         } catch (e) {
           showToast(e.message, 'error');
         }
       }
-
       async function deleteFileFromModal() {
         if (!confirm('Delete this file?')) return;
         try {
           await api(`/api/files/${state.editFileId}`, { method: 'DELETE' });
           closeModal('edit');
           showToast('File deleted', 'success');
-          await Promise.all([loadFiles(), loadTags()]);
+          await Promise.all([resetAndLoadFiles(), loadTags()]);
         } catch (e) {
           showToast(e.message, 'error');
         }
       }
-
       function downloadFile(id, name) {
         const a = document.createElement('a');
         a.href = `/api/files/${id}/download`;
@@ -1944,7 +2138,7 @@
         if (f) downloadFile(f.id, f.original_name);
       }
 
-      // ── Lightbox ──────────────────────────────────────────────────
+      // ── Lightbox ──────────────────────────────────────────────────────────────
       function openLightbox() {
         const f = state.files.find((x) => x.id === state.editFileId);
         if (!f || !isImage(f.mimetype)) return;
@@ -1959,7 +2153,7 @@
         document.body.style.overflow = '';
       }
 
-      // ── Folders ───────────────────────────────────────────────────
+      // ── Folders ───────────────────────────────────────────────────────────────
       function openCreateFolder() {
         state.editFolderId = null;
         document.getElementById('folder-modal-title').textContent =
@@ -2003,13 +2197,13 @@
           await api(`/api/folders/${id}`, { method: 'DELETE' });
           showToast('Folder deleted', 'success');
           if (state.filterFolder == id) state.filterFolder = null;
-          await Promise.all([loadFolders(), loadFiles()]);
+          await Promise.all([loadFolders(), resetAndLoadFiles()]);
         } catch (e) {
           showToast(e.message, 'error');
         }
       }
 
-      // ── Modal helpers ─────────────────────────────────────────────
+      // ── Modal helpers ─────────────────────────────────────────────────────────
       function openModal(name) {
         document.getElementById('modal-' + name).classList.add('open');
       }
@@ -2017,7 +2211,7 @@
         document.getElementById('modal-' + name).classList.remove('open');
       }
 
-      // ── Tab nav ───────────────────────────────────────────────────
+      // ── Tab nav ───────────────────────────────────────────────────────────────
       function switchTab(name) {
         document
           .querySelectorAll('.tab')
@@ -2034,7 +2228,7 @@
           );
       }
 
-      // ── Toast ─────────────────────────────────────────────────────
+      // ── Toast ─────────────────────────────────────────────────────────────────
       function showToast(msg, type = '') {
         const t = document.getElementById('toast');
         t.textContent = msg;
@@ -2042,7 +2236,7 @@
         setTimeout(() => (t.className = 'toast'), 2500);
       }
 
-      // ── View toggle (files tab) ───────────────────────────────────
+      // ── View toggle (files tab) ───────────────────────────────────────────────
       function toggleView() {
         const grid = document.getElementById('files-list');
         const btn = document.getElementById('view-toggle');
@@ -2063,18 +2257,18 @@
         } catch (e) {}
       })();
 
-      // ── Detail view (folder tab) ──────────────────────────────────
+      // ── Detail view (folder tab) ──────────────────────────────────────────────
       let detailView = 'list';
       function setDetailView(mode) {
         detailView = mode;
         const el = document.getElementById('detail-files-list');
         el.classList.remove('cols3', 'cols5');
         if (mode !== 'list') el.classList.add(mode);
-        ['list', 'cols3', 'cols5'].forEach((m) => {
+        ['list', 'cols3', 'cols5'].forEach((m) =>
           document
             .getElementById('vbtn-' + m)
-            .classList.toggle('active', m === mode);
-        });
+            .classList.toggle('active', m === mode),
+        );
         try {
           localStorage.setItem('detailView', mode);
         } catch (e) {}
@@ -2085,7 +2279,10 @@
         } catch (e) {}
       })();
 
-      // ── Folder detail ─────────────────────────────────────────────
+      // ── Folder detail ─────────────────────────────────────────────────────────
+      // The folder detail view loads ALL files for that folder in one shot
+      // (folders are bounded in size and don't need infinite scroll).
+      // It uses limit=-1 which the server interprets as "no limit".
       let detailFolderId = null;
       let detailFolderName = '';
 
@@ -2105,11 +2302,8 @@
           : 'none';
         document.getElementById('folders-main').style.display = 'none';
         document.getElementById('folders-detail').classList.add('active');
-
-        // Restore saved view
         setDetailView(detailView);
 
-        // Stats
         if (folderId) {
           try {
             const stats = await api('/api/folders/' + folderId + '/stats');
@@ -2125,20 +2319,23 @@
       }
 
       async function refreshDetailFiles() {
+        // limit=-1 → server returns all files for this folder with no pagination
         const params = new URLSearchParams();
         params.set(
           'folder_id',
           detailFolderId != null ? detailFolderId : 'none',
         );
-        const files = await api('/api/files?' + params);
+        params.set('limit', -1);
+
+        const data = await api('/api/files?' + params);
+        const files = data.files; // { files, total }
         const el = document.getElementById('detail-files-list');
 
         if (detailFolderId == null) {
-          const total = files.reduce((a, f) => a + (f.size || 0), 0);
-          document.getElementById('detail-file-count').textContent =
-            files.length;
-          document.getElementById('detail-folder-size').textContent =
-            fmtSize(total);
+          document.getElementById('detail-file-count').textContent = data.total;
+          document.getElementById('detail-folder-size').textContent = fmtSize(
+            files.reduce((a, f) => a + (f.size || 0), 0),
+          );
         }
 
         if (!files.length) {
@@ -2147,25 +2344,47 @@
           return;
         }
 
-        el.innerHTML = files
-          .map((f) => {
-            const thumbHtml = isImage(f.mimetype)
-              ? `<div class="file-thumb"><img src="/api/files/${f.id}/preview" alt="" loading="lazy" onerror="this.parentNode.innerHTML='${fileIcon(f.mimetype)}'"></div>`
-              : `<div class="file-thumb">${fileIcon(f.mimetype)}</div>`;
-            return `
-    <div class="file-card" onclick="openEdit(${f.id})">
-      ${thumbHtml}
-      <div class="file-info">
-        <div class="file-name">${escHtml(f.original_name)}</div>
-        <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
-        ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
-      </div>
-      <div class="file-actions" onclick="event.stopPropagation()">
-        <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
-      </div>
-    </div>`;
-          })
-          .join('');
+        el.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        files.forEach((f) => {
+          const card = document.createElement('div');
+          card.className = 'file-card';
+          card.onclick = () => openEdit(f.id);
+          if (isImage(f.mimetype)) {
+            card.innerHTML = `
+              <div class="file-thumb skeleton">
+                <img data-src="/api/files/${f.id}/preview" data-fallback="${fileIcon(f.mimetype)}" alt="" />
+              </div>
+              <div class="file-info">
+                <div class="file-name">${escHtml(f.original_name)}</div>
+                <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
+                ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
+              </div>
+              <div class="file-actions" onclick="event.stopPropagation()">
+                <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
+              </div>`;
+            imgObserver.observe(card.querySelector('img'));
+          } else {
+            card.innerHTML = `
+              <div class="file-thumb">${fileIcon(f.mimetype)}</div>
+              <div class="file-info">
+                <div class="file-name">${escHtml(f.original_name)}</div>
+                <div class="file-meta">${fmtSize(f.size)} · ${fmtDate(f.uploaded_at)}</div>
+                ${f.tags.length ? `<div class="file-tags">${f.tags.map((t) => `<span class="ftag">#${escHtml(t)}</span>`).join('')}</div>` : ''}
+              </div>
+              <div class="file-actions" onclick="event.stopPropagation()">
+                <div class="btn-sm download" onclick="downloadFile(${f.id},'${escJs(f.original_name)}')">⬇️</div>
+              </div>`;
+          }
+          fragment.appendChild(card);
+        });
+        el.appendChild(fragment);
+
+        // Also sync these files into state.files so openEdit() can find them
+        // (merge by id to avoid duplicates)
+        files.forEach((f) => {
+          if (!state.files.find((x) => x.id === f.id)) state.files.push(f);
+        });
       }
 
       function closeFolderDetail() {
@@ -2173,50 +2392,44 @@
         document.getElementById('folders-detail').classList.remove('active');
         detailFolderId = null;
       }
-
       function openRenameCurrentFolder() {
         if (!detailFolderId) return;
         openRenameFolder(detailFolderId, detailFolderName);
       }
-
       function goToUploadInFolder() {
         switchTab('upload');
         if (detailFolderId)
           document.getElementById('upload-folder').value = detailFolderId;
       }
 
+      // Uses limit=1 — only needs the total count, not the full file list
       async function updateUnclassifiedCount() {
         try {
-          const files = await api('/api/files?folder_id=none');
+          const data = await api('/api/files?folder_id=none&limit=1&offset=0');
           const el = document.getElementById('unclassified-count');
-          if (el) el.textContent = files.length + ' files';
+          if (el) el.textContent = data.total + ' files';
         } catch (e) {}
       }
 
-      // ── Move file ─────────────────────────────────────────────────
+      // ── Move file ─────────────────────────────────────────────────────────────
       function openMoveModal() {
         const f =
           state.files.find((x) => x.id === state.editFileId) ||
           (detailFolderId !== undefined ? { folder_id: detailFolderId } : null);
         const currentFolderId = f ? f.folder_id : null;
-
         const items = [
           { id: null, name: '📥 Unclassified' },
           ...state.folders.map((fl) => ({ id: fl.id, name: '📁 ' + fl.name })),
         ];
-
         document.getElementById('move-folder-list').innerHTML = items
           .map(
             (item) => `
-    <div class="move-folder-item ${item.id == currentFolderId ? 'current' : ''}"
-         onclick="moveFileTo(${item.id})">
-      ${escHtml(item.name)}
-      ${item.id == currentFolderId ? '<span style="margin-left:auto;font-size:11px;color:var(--text3)">current</span>' : ''}
-    </div>
-  `,
+          <div class="move-folder-item ${item.id == currentFolderId ? 'current' : ''}" onclick="moveFileTo(${item.id})">
+            ${escHtml(item.name)}
+            ${item.id == currentFolderId ? '<span style="margin-left:auto;font-size:11px;color:var(--text3)">current</span>' : ''}
+          </div>`,
           )
           .join('');
-
         openModal('move');
       }
 
@@ -2229,7 +2442,6 @@
             body: JSON.stringify({ folder_id: folderId }),
           });
           showToast('File moved', 'success');
-          // Update local state immediately
           const f = state.files.find((x) => x.id === state.editFileId);
           if (f) {
             f.folder_id = folderId;
@@ -2237,8 +2449,7 @@
               ? state.folders.find((fl) => fl.id === folderId)?.name || null
               : null;
           }
-          await Promise.all([loadFiles(), loadFolders()]);
-          // Refresh detail view if open
+          await Promise.all([resetAndLoadFiles(), loadFolders()]);
           if (
             document
               .getElementById('folders-detail')
