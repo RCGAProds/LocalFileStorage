@@ -1,5 +1,2 @@
-database.db
-uploads/Docs/20260310_180650_389433.pdf
-uploads/Pictures/20260310_180542_244849.jpg
-uploads/Pictures/20260310_180551_519604.png
-uploads/Pictures/20260310_180554_750748.jpg
+*.db
+uploads/*
