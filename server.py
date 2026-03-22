@@ -1369,6 +1369,62 @@ def _print_startup_banner():
     print()
 
 
+def _emit_status_lines():
+    """
+    Emit structured [STATUS] key=value lines consumed by Launch.py.
+    Called instead of _print_startup_banner() when LOCALFILEHUB_LAUNCHER=1.
+    Output must be flushed immediately so the launcher reads it line-by-line.
+    """
+    import platform, sys as _sys
+
+    def _s(key, value):
+        print(f'[STATUS] {key}={value}', flush=True)
+
+    # DB stats
+    try:
+        _conn = get_db()
+        n_files   = _conn.execute('SELECT COUNT(*) FROM files').fetchone()[0]
+        n_folders = _conn.execute('SELECT COUNT(*) FROM folders').fetchone()[0]
+        n_tags    = _conn.execute('SELECT COUNT(*) FROM tags').fetchone()[0]
+        n_rules   = _conn.execute('SELECT COUNT(*) FROM rules').fetchone()[0]
+        _conn.close()
+    except Exception:
+        n_files = n_folders = n_tags = n_rules = 0
+
+    # Disk
+    try:
+        _total, _used, _free = shutil.disk_usage(UPLOAD_FOLDER)
+        _upload_size = sum(
+            os.path.getsize(os.path.join(dp, f))
+            for dp, _, fs in os.walk(UPLOAD_FOLDER) for f in fs
+        )
+    except Exception:
+        _free = 0
+        _upload_size = 0
+
+    # Feature flags
+    _ffmpeg_ok = bool(shutil.which('ffmpeg'))
+    _n_hooks   = sum(len(v) for v in _hooks.values())
+
+    _s('files',          n_files)
+    _s('folders',        n_folders)
+    _s('tags',           n_tags)
+    _s('uploads_bytes',  _upload_size)
+    _s('disk_free_bytes', _free)
+    _s('feat_pillow',    '1' if PIL_AVAILABLE       else '0')
+    _s('feat_imagehash', '1' if IMAGEHASH_AVAILABLE else '0')
+    _s('feat_limiter',   '1' if LIMITER_AVAILABLE   else '0')
+    _s('feat_ffmpeg',    '1' if _ffmpeg_ok           else '0')
+    _s('feat_hooks',     str(_n_hooks))
+    _s('python',         platform.python_version())
+    _s('os',             f'{platform.system()} {platform.release()}')
+    _s('ready',          '1')
+
+
 if __name__ == '__main__':
-    _print_startup_banner()
+    _launcher_mode = os.environ.get('LOCALFILEHUB_LAUNCHER') == '1'
+    if _launcher_mode:
+        _emit_status_lines()
+    else:
+        _print_startup_banner()
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
