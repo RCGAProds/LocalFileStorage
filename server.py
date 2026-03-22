@@ -35,7 +35,6 @@ try:
     LIMITER_AVAILABLE = True
 except ImportError:
     LIMITER_AVAILABLE = False
-    # Dummy decorator so routes don't crash when flask_limiter is absent
     class _DummyLimiter:
         def limit(self, *a, **kw):
             def decorator(f): return f
@@ -50,12 +49,9 @@ BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 DB_PATH       = os.path.join(BASE_DIR, 'database.db')
 
-THUMB_SIZE    = (320, 320)   # max thumbnail dimensions
-THUMB_QUALITY = 80           # WebP quality (0–100)
+THUMB_SIZE    = (720, 720)
+THUMB_QUALITY = 80
 
-# ── Thumbnail LRU cache config ────────────────────────────────────────────────
-# Each entry is raw WebP bytes in RAM. 200 entries × ~30 KB avg ≈ ~6 MB max.
-# Tune THUMB_CACHE_MAX_ENTRIES to taste (e.g. 500 for a beefier server).
 THUMB_CACHE_MAX_ENTRIES = 200
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -66,8 +62,38 @@ IMAGE_MIMETYPES = {
 }
 VIDEO_MIMETYPES = {
     'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
-    'video/x-msvideo', 'video/x-matroska', 'video/mpeg',
+    'video/x-msvideo', 'video/x-matroska', 'video/mpeg', 'video/3gpp',
 }
+
+# ─── Extension hook registry ──────────────────────────────────────────────────
+#
+# Extensions can subscribe to lifecycle events by calling:
+#   from server import register_hook
+#   register_hook('on_image_uploaded', my_function)
+#
+# Available hooks:
+#   on_image_uploaded(file_id, save_path, tags_raw, conn)
+#     Called after an image is saved and its DB row is committed.
+#     conn is an open, committed connection — extension may read but
+#     should open its own connection if it needs to write.
+#
+#   on_db_init(conn)
+#     Called inside init_db() after all core tables are ready.
+#     Extensions use this to CREATE their own tables / ALTER columns.
+
+_hooks = defaultdict(list)
+
+def register_hook(event: str, fn):
+    """Register a callable for a named lifecycle event."""
+    _hooks[event].append(fn)
+
+def _fire_hook(event: str, *args, **kwargs):
+    """Call all registered handlers for an event, logging exceptions."""
+    for fn in _hooks[event]:
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            print(f'[HOOK] Error in {event} -> {fn.__name__}: {e}')
 
 # ─── Disk helpers ─────────────────────────────────────────────────────────────
 
@@ -113,15 +139,6 @@ def delete_folder_on_disk(folder_name):
             pass
 
 # ─── Thumbnail LRU in-memory cache ───────────────────────────────────────────
-#
-# Architecture:
-#   • Thumbnails are generated on first request (lazy) and stored as raw bytes
-#     in an OrderedDict that acts as an LRU cache — no files written to disk.
-#   • When the cache reaches THUMB_CACHE_MAX_ENTRIES the least-recently-used
-#     entry is evicted automatically, bounding memory usage.
-#   • Thread-safe via a single RLock (Flask runs with threaded=True).
-#   • delete_thumbnail() simply evicts the key from the dict — O(1).
-#   • The old `thumbnails/` directory is no longer created or used.
 
 class _LRUThumbnailCache:
     """
@@ -163,9 +180,9 @@ class _LRUThumbnailCache:
         with self._lock:
             total_bytes = sum(len(v) for v in self._data.values())
             return {
-                'entries':    len(self._data),
+                'entries':     len(self._data),
                 'max_entries': self._max,
-                'memory_mb':  round(total_bytes / 1_048_576, 2),
+                'memory_mb':   round(total_bytes / 1_048_576, 2),
             }
 
 
@@ -175,9 +192,9 @@ _thumb_cache = _LRUThumbnailCache(THUMB_CACHE_MAX_ENTRIES)
 def get_thumbnail_bytes(src_path, stored_name):
     """
     Return WebP thumbnail bytes for an image, generating and caching on demand.
-    • First call   → open original, resize, encode to bytes, store in LRU cache.
-    • Repeat calls → return bytes directly from RAM (no disk I/O, no PIL).
-    • On eviction  → next request regenerates transparently.
+    First call   -> open original, resize, encode to bytes, store in LRU cache.
+    Repeat calls -> return bytes directly from RAM (no disk I/O, no PIL).
+    On eviction  -> next request regenerates transparently.
     Requires Pillow; returns None if unavailable or on error.
     """
     if not PIL_AVAILABLE:
@@ -225,7 +242,7 @@ def compute_phash(src_path):
 def phash_distance(h1, h2):
     """
     Hamming distance between two hex pHash strings.
-    Returns an integer 0–64 (0 = identical, ≤10 = visually similar).
+    Returns an integer 0-64 (0 = identical, <=10 = visually similar).
     Returns None if either hash is invalid.
     """
     if not h1 or not h2:
@@ -248,17 +265,16 @@ def compute_sha256(path, chunk=65536):
     return h.hexdigest()
 
 # ─── Simple in-memory rate limiter (fallback when flask_limiter absent) ───────
-# Only used for the upload endpoint.
 
 _upload_calls = defaultdict(list)
-UPLOAD_RATE_LIMIT = 30   # max calls
-UPLOAD_RATE_WINDOW = 60  # seconds
+UPLOAD_RATE_LIMIT  = 30
+UPLOAD_RATE_WINDOW = 60
 
 def _check_upload_rate(ip):
     """Returns True if the request is within limits, False if it should be blocked."""
     if LIMITER_AVAILABLE:
-        return True  # flask_limiter handles it via decorator
-    now = time.time()
+        return True
+    now   = time.time()
     calls = [t for t in _upload_calls[ip] if now - t < UPLOAD_RATE_WINDOW]
     calls.append(now)
     _upload_calls[ip] = calls
@@ -269,26 +285,18 @@ def _check_upload_rate(ip):
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Correctness
     conn.execute("PRAGMA foreign_keys = ON")
-    # ── Performance PRAGMAs ───────────────────────────────────────────────────
-    # WAL mode: concurrent reads + writes without locking the entire DB.
-    # Eliminates "database is locked" errors during simultaneous uploads/browsing.
     conn.execute("PRAGMA journal_mode = WAL")
-    # NORMAL: fsync only at checkpoints — safe against OS crashes, faster than FULL.
     conn.execute("PRAGMA synchronous = NORMAL")
-    # 8 MB page cache kept in RAM (negative value = kibibytes).
     conn.execute("PRAGMA cache_size = -8000")
-    # Temporary tables and indices stored in RAM instead of a temp file.
     conn.execute("PRAGMA temp_store = MEMORY")
-    # 128 MB memory-mapped I/O — sequential scans bypass read() syscalls.
     conn.execute("PRAGMA mmap_size = 134217728")
     return conn
 
 def init_db():
     conn = get_db()
 
-    # ── Step 1: create tables (never touches existing data) ───────────────────
+    # ── Step 1: create core tables ────────────────────────────────────────────
     conn.executescript('''
         CREATE TABLE IF NOT EXISTS folders (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -329,7 +337,6 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- Indices that are safe on the base schema (no sha256/phash yet).
         CREATE INDEX IF NOT EXISTS idx_files_folder
             ON files(folder_id);
         CREATE INDEX IF NOT EXISTS idx_files_uploaded
@@ -340,9 +347,7 @@ def init_db():
             ON file_tags(file_id);
     ''')
 
-    # ── Step 2: migrate columns added after the initial release ───────────────
-    # Must happen BEFORE creating indices that reference these columns,
-    # because SQLite will error if the column doesn't exist yet.
+    # ── Step 2: migrate columns added after initial release ───────────────────
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()}
     if 'sha256' not in existing_cols:
         conn.execute("ALTER TABLE files ADD COLUMN sha256 TEXT")
@@ -350,20 +355,25 @@ def init_db():
         conn.execute("ALTER TABLE files ADD COLUMN phash TEXT")
     conn.commit()
 
-    # ── Step 3: indices that depend on the migrated columns ───────────────────
+    # ── Step 3: indices on migrated columns ───────────────────────────────────
     conn.executescript('''
-        CREATE INDEX IF NOT EXISTS idx_files_sha256
-            ON files(sha256);
-        CREATE INDEX IF NOT EXISTS idx_files_phash
-            ON files(phash);
+        CREATE INDEX IF NOT EXISTS idx_files_sha256 ON files(sha256);
+        CREATE INDEX IF NOT EXISTS idx_files_phash  ON files(phash);
     ''')
-
     conn.commit()
+
+    # ── Step 4: let extensions add their own tables / columns ─────────────────
+    #
+    # Extensions register their on_db_init hook inside register(), which is
+    # called by load_extensions() during _bootstrap() below — before init_db()
+    # runs. Hooks must use conn.execute() (not conn.executescript()) to avoid
+    # the implicit COMMIT that executescript() issues.
+    _fire_hook('on_db_init', conn)
+    conn.commit()
+
     conn.close()
 
-# ── Batch tag loader — resolves N+1 query problem ────────────────────────────
-# Instead of one query per file, fetch all tags for a list of file IDs in one
-# query and group them in Python.
+# ── Batch tag loader ──────────────────────────────────────────────────────────
 
 def get_tags_for_ids(conn, file_ids):
     """
@@ -383,7 +393,7 @@ def get_tags_for_ids(conn, file_ids):
     result = defaultdict(list)
     for r in rows:
         result[r['file_id']].append(r['name'])
-    return result
+    return dict(result)
 
 def get_file_tags(conn, file_id):
     """Single-file helper (kept for backwards compatibility in write paths)."""
@@ -414,7 +424,7 @@ ALLOWED_SORT_FIELDS = {
 ALLOWED_SORT_DIRS = {'asc', 'desc'}
 
 def resolve_sort(field, direction):
-    col = ALLOWED_SORT_FIELDS.get(field, 'f.uploaded_at')
+    col       = ALLOWED_SORT_FIELDS.get(field, 'f.uploaded_at')
     direction = direction.lower() if direction else 'desc'
     if direction not in ALLOWED_SORT_DIRS:
         direction = 'desc'
@@ -424,13 +434,17 @@ def resolve_sort(field, direction):
 
 @app.route('/')
 def index():
+    # Serve premium UI if the extension has installed it, otherwise base UI
+    premium_html = os.path.join(BASE_DIR, 'extensions', 'index.html')
+    if os.path.exists(premium_html):
+        return send_file(premium_html)
     return send_from_directory(BASE_DIR, 'index.html')
 
 # ─── Folders API ──────────────────────────────────────────────────────────────
 
 @app.route('/api/folders', methods=['GET'])
 def get_folders():
-    conn = get_db()
+    conn    = get_db()
     folders = conn.execute('SELECT * FROM folders ORDER BY name').fetchall()
     conn.close()
     return jsonify([dict(f) for f in folders])
@@ -454,11 +468,11 @@ def create_folder():
 
 @app.route('/api/folders/<int:folder_id>', methods=['PUT'])
 def rename_folder(folder_id):
-    data = request.json
+    data     = request.json
     new_name = data.get('name', '').strip()
     if not new_name:
         return jsonify({'error': 'Name is required'}), 400
-    conn = get_db()
+    conn    = get_db()
     old_row = conn.execute('SELECT name FROM folders WHERE id = ?', (folder_id,)).fetchone()
     if not old_row:
         conn.close()
@@ -476,7 +490,7 @@ def rename_folder(folder_id):
 @app.route('/api/folders/<int:folder_id>', methods=['DELETE'])
 def delete_folder(folder_id):
     conn = get_db()
-    row = conn.execute('SELECT name FROM folders WHERE id = ?', (folder_id,)).fetchone()
+    row  = conn.execute('SELECT name FROM folders WHERE id = ?', (folder_id,)).fetchone()
     if row:
         delete_folder_on_disk(row['name'])
     conn.execute('UPDATE files SET folder_id = NULL WHERE folder_id = ?', (folder_id,))
@@ -488,7 +502,7 @@ def delete_folder(folder_id):
 @app.route('/api/folders/<int:folder_id>/stats')
 def folder_stats(folder_id):
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         'SELECT COUNT(*) as total, COALESCE(SUM(size), 0) as size FROM files WHERE folder_id = ?',
         (folder_id,)
     ).fetchone()
@@ -499,7 +513,7 @@ def folder_stats(folder_id):
 def download_folder_zip(folder_id):
     """Stream a ZIP archive containing all files in the folder."""
     import zipfile, tempfile
-    conn = get_db()
+    conn       = get_db()
     folder_row = conn.execute('SELECT name FROM folders WHERE id = ?', (folder_id,)).fetchone()
     if not folder_row:
         conn.close()
@@ -531,7 +545,6 @@ def build_files_query(search, folder_id, tag):
     conditions, params = [], []
 
     if search:
-        # Strip leading '#' so users can search by hashtag
         search_clean = search.lstrip('#')
         conditions.append('''(
             f.original_name LIKE ? OR
@@ -567,12 +580,10 @@ def get_files():
     folder_id = request.args.get('folder_id', '')
     tag       = request.args.get('tag', '').strip()
 
-    # Sort params
-    sort_field = request.args.get('sort', 'uploaded_at')
-    sort_dir   = request.args.get('dir', 'desc')
+    sort_field       = request.args.get('sort', 'uploaded_at')
+    sort_dir         = request.args.get('dir', 'desc')
     sort_col, sort_dir = resolve_sort(sort_field, sort_dir)
 
-    # Pagination — limit=-1 means "no limit" (used by folder-detail view)
     try:
         limit = int(request.args.get('limit', 30))
     except ValueError:
@@ -582,8 +593,8 @@ def get_files():
     except ValueError:
         offset = 0
 
-    conn = get_db()
-    where, params = build_files_query(search, folder_id, tag)
+    conn           = get_db()
+    where, params  = build_files_query(search, folder_id, tag)
 
     total = conn.execute(
         f'SELECT COUNT(*) as cnt FROM files f {where}', params
@@ -603,7 +614,6 @@ def get_files():
     else:
         rows = conn.execute(data_query, params).fetchall()
 
-    # ── Batch-load tags (single query for all returned files) ─────────────────
     file_ids = [r['id'] for r in rows]
     tags_map = get_tags_for_ids(conn, file_ids)
     conn.close()
@@ -617,11 +627,10 @@ def get_single_file(file_id):
     """
     Return metadata for a single file by ID.
     Used by the frontend as a fallback when openEdit() can't find the file in
-    the already-loaded state.files array (e.g. files loaded only via folder
-    detail view that aren't in the current pagination window).
+    the already-loaded state.files array.
     """
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         '''SELECT f.*, folders.name as folder_name
            FROM files f
            LEFT JOIN folders ON f.folder_id = folders.id
@@ -646,7 +655,7 @@ def upload_file():
     if 'file' not in request.files:
         return jsonify({'error': 'No file found in request'}), 400
 
-    file = request.files['file']
+    file      = request.files['file']
     folder_id = request.form.get('folder_id') or None
     tags_raw  = request.form.get('tags', '')
 
@@ -667,13 +676,15 @@ def upload_file():
     else:
         ext = os.path.splitext(safe_name)[1]
 
-    timestamp    = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    stored_name  = f'{timestamp}{ext}'
+    timestamp   = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    stored_name = f'{timestamp}{ext}'
 
     folder_name = None
     if folder_id:
         conn_tmp = get_db()
-        frow = conn_tmp.execute('SELECT name FROM folders WHERE id = ?', (folder_id,)).fetchone()
+        frow     = conn_tmp.execute(
+            'SELECT name FROM folders WHERE id = ?', (folder_id,)
+        ).fetchone()
         conn_tmp.close()
         if frow:
             folder_name = frow['name']
@@ -695,7 +706,7 @@ def upload_file():
     if mimetype in IMAGE_MIMETYPES:
         phash = compute_phash(save_path)
         # Pre-generate thumbnail so first load is instant
-        generate_thumbnail(save_path, stored_name)
+        get_thumbnail_bytes(save_path, stored_name)
 
     conn = get_db()
 
@@ -711,17 +722,14 @@ def upload_file():
         ).fetchone()
         if dup:
             duplicate_info = {
-                'type': 'exact',
-                'id':   dup['id'],
-                'name': dup['original_name'],
+                'type':   'exact',
+                'id':     dup['id'],
+                'name':   dup['original_name'],
                 'folder': dup['folder_name'],
             }
 
     # ── Check for perceptual (near) duplicate ─────────────────────────────────
     if phash and not duplicate_info:
-        # Fetch all phashes from the DB and compare in Python.
-        # For very large libraries (10k+ images) this could be moved to a
-        # background job; for typical personal use it's fast enough inline.
         candidates = conn.execute(
             'SELECT id, original_name, phash FROM files WHERE phash IS NOT NULL'
         ).fetchall()
@@ -759,6 +767,11 @@ def upload_file():
                      (file_id, tag_row['id']))
 
     conn.commit()
+
+    # ── Fire extension hook (after commit, connection still open for reads) ───
+    if mimetype in IMAGE_MIMETYPES:
+        _fire_hook('on_image_uploaded', file_id, save_path, tags_raw, conn)
+
     tags = get_file_tags(conn, file_id)
     row  = conn.execute(
         '''SELECT f.*, folders.name as folder_name FROM files f
@@ -777,7 +790,7 @@ def upload_file():
 def update_file(file_id):
     data = request.json
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         '''SELECT f.filename, f.folder_id, folders.name as folder_name
            FROM files f LEFT JOIN folders ON f.folder_id = folders.id
            WHERE f.id = ?''',
@@ -794,7 +807,9 @@ def update_file(file_id):
         new_folder_id   = data['folder_id']
         new_folder_name = None
         if new_folder_id:
-            frow = conn.execute('SELECT name FROM folders WHERE id = ?', (new_folder_id,)).fetchone()
+            frow = conn.execute(
+                'SELECT name FROM folders WHERE id = ?', (new_folder_id,)
+            ).fetchone()
             if frow:
                 new_folder_name = frow['name']
         move_file_on_disk(stored_name, old_folder_name, new_folder_name)
@@ -804,7 +819,9 @@ def update_file(file_id):
         conn.execute('DELETE FROM file_tags WHERE file_id = ?', (file_id,))
         for tag_name in [t.strip().lstrip('#') for t in data['tags'] if t.strip()]:
             conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (tag_name,))
-            tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (tag_name,)).fetchone()
+            tag_row = conn.execute(
+                'SELECT id FROM tags WHERE name = ?', (tag_name,)
+            ).fetchone()
             conn.execute('INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?,?)',
                          (file_id, tag_row['id']))
 
@@ -836,19 +853,20 @@ def batch_update_files():
       - add_tags            list of tag names to add
       - remove_tags         list of tag names to remove
     """
-    data     = request.json or {}
-    ids      = data.get('ids', [])
+    data = request.json or {}
+    ids  = data.get('ids', [])
     if not ids:
         return jsonify({'error': 'No file IDs provided'}), 400
 
     conn = get_db()
 
-    # Move
     if 'folder_id' in data:
         new_folder_id   = data['folder_id']
         new_folder_name = None
         if new_folder_id:
-            frow = conn.execute('SELECT name FROM folders WHERE id = ?', (new_folder_id,)).fetchone()
+            frow = conn.execute(
+                'SELECT name FROM folders WHERE id = ?', (new_folder_id,)
+            ).fetchone()
             if frow:
                 new_folder_name = frow['name']
         for fid in ids:
@@ -860,10 +878,11 @@ def batch_update_files():
             if row:
                 move_file_on_disk(row['filename'], row['folder_name'], new_folder_name)
         placeholders = ','.join('?' * len(ids))
-        conn.execute(f'UPDATE files SET folder_id = ? WHERE id IN ({placeholders})',
-                     [new_folder_id] + ids)
+        conn.execute(
+            f'UPDATE files SET folder_id = ? WHERE id IN ({placeholders})',
+            [new_folder_id] + ids
+        )
 
-    # Add tags
     for tag_name in [t.strip().lstrip('#') for t in data.get('add_tags', []) if t.strip()]:
         conn.execute('INSERT OR IGNORE INTO tags (name) VALUES (?)', (tag_name,))
         tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (tag_name,)).fetchone()
@@ -871,7 +890,6 @@ def batch_update_files():
             conn.execute('INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?,?)',
                          (fid, tag_row['id']))
 
-    # Remove tags
     for tag_name in [t.strip().lstrip('#') for t in data.get('remove_tags', []) if t.strip()]:
         tag_row = conn.execute('SELECT id FROM tags WHERE name = ?', (tag_name,)).fetchone()
         if tag_row:
@@ -896,7 +914,7 @@ def batch_delete_files():
     if not ids:
         return jsonify({'error': 'No file IDs provided'}), 400
 
-    conn = get_db()
+    conn    = get_db()
     deleted = 0
     for fid in ids:
         row = conn.execute(
@@ -922,7 +940,7 @@ def batch_delete_files():
 @app.route('/api/files/<int:file_id>', methods=['DELETE'])
 def delete_file(file_id):
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         '''SELECT f.filename, folders.name as folder_name FROM files f
            LEFT JOIN folders ON f.folder_id = folders.id WHERE f.id = ?''',
         (file_id,)
@@ -946,7 +964,7 @@ def delete_file(file_id):
 @app.route('/api/files/<int:file_id>/download')
 def download_file(file_id):
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         '''SELECT f.filename, f.original_name, folders.name as folder_name
            FROM files f LEFT JOIN folders ON f.folder_id = folders.id
            WHERE f.id = ?''',
@@ -956,9 +974,11 @@ def download_file(file_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     directory = folder_disk_path(row['folder_name']) if row['folder_name'] else UPLOAD_FOLDER
-    return send_from_directory(directory, row['filename'],
-                               as_attachment=True,
-                               download_name=row['original_name'])
+    return send_from_directory(
+        directory, row['filename'],
+        as_attachment=True,
+        download_name=row['original_name'],
+    )
 
 
 @app.route('/api/files/<int:file_id>/preview')
@@ -968,7 +988,7 @@ def preview_file(file_id):
     Pass ?full=1 to bypass the thumbnail and serve the original file.
     """
     conn = get_db()
-    row = conn.execute(
+    row  = conn.execute(
         '''SELECT f.filename, f.mimetype, folders.name as folder_name
            FROM files f LEFT JOIN folders ON f.folder_id = folders.id
            WHERE f.id = ?''',
@@ -982,7 +1002,9 @@ def preview_file(file_id):
     full_mode = request.args.get('full', '0') == '1'
     is_image  = row['mimetype'] in IMAGE_MIMETYPES
     is_video  = row['mimetype'] in VIDEO_MIMETYPES
+    mimetype  = row['mimetype'] or 'application/octet-stream'
 
+    # ── Thumbnail mode (no ?full=1) ───────────────────────────────────────────
     if not full_mode:
         if is_image and PIL_AVAILABLE:
             thumb_bytes = get_thumbnail_bytes(full_path, row['filename'])
@@ -995,33 +1017,41 @@ def preview_file(file_id):
                 response.headers['Cache-Control'] = 'private, max-age=3600'
                 response.headers['Vary'] = 'Accept'
                 return response
+            # Pillow failed for this image → fall through to serve original
 
         if is_video:
-            for seek in ('1', '0'):
-                try:
-                    proc = subprocess.run(
-                        [
-                            'ffmpeg', '-loglevel', 'error',
-                            '-ss', seek, '-i', full_path,
-                            '-frames:v', '1',
-                            '-vf', f'scale={THUMB_SIZE[0]}:-2',
-                            '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
-                        ],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
-                    )
-                    if proc.returncode == 0 and proc.stdout:
-                        resp = send_file(io.BytesIO(proc.stdout), mimetype='image/jpeg')
-                        resp.headers['Cache-Control'] = 'private, max-age=3600'
-                        return resp
-                except Exception as e:
-                    print(f'[WARN] video thumb seek={seek} failed: {e}')
-            return jsonify({'error': 'thumbnail unavailable'}), 404
+            ffmpeg_ok = bool(shutil.which('ffmpeg'))
+            if ffmpeg_ok:
+                for seek in ('1', '0'):
+                    try:
+                        proc = subprocess.run(
+                            [
+                                'ffmpeg', '-loglevel', 'error',
+                                '-ss', seek, '-i', full_path,
+                                '-frames:v', '1',
+                                '-vf', f'scale={THUMB_SIZE[0]}:-2',
+                                '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
+                            ],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10,
+                        )
+                        if proc.returncode == 0 and proc.stdout:
+                            resp = send_file(io.BytesIO(proc.stdout), mimetype='image/jpeg')
+                            resp.headers['Cache-Control'] = 'private, max-age=3600'
+                            return resp
+                    except Exception as e:
+                        print(f'[WARN] video thumb seek={seek} failed: {e}')
+            # ffmpeg unavailable or failed → serve original so the browser can
+            # at least play the video (the card badge will still show ▶)
+            # fall through to the serve-original block below
 
+    # ── Full / fallback: serve the original file ──────────────────────────────
     directory = folder_disk_path(row['folder_name']) if row['folder_name'] else UPLOAD_FOLDER
+    if not os.path.exists(os.path.join(directory, row['filename'])):
+        return jsonify({'error': 'File not found on disk'}), 404
     return send_from_directory(
         directory, row['filename'],
         as_attachment=False,
-        mimetype=row['mimetype'] if is_video else None,
+        mimetype=mimetype,
     )
 
 
@@ -1033,7 +1063,7 @@ def thumbnail_cache_info():
 
 @app.route('/api/thumbnails/cache', methods=['DELETE'])
 def clear_thumbnail_cache():
-    """Flush the entire thumbnail cache (useful after bulk operations)."""
+    """Flush the entire thumbnail cache."""
     with _thumb_cache._lock:
         _thumb_cache._data.clear()
     return jsonify({'ok': True, 'message': 'Thumbnail cache cleared'})
@@ -1058,7 +1088,7 @@ def get_duplicates():
     Query param ?type=exact|similar (default: exact).
     """
     dup_type = request.args.get('type', 'exact')
-    conn = get_db()
+    conn     = get_db()
 
     if dup_type == 'exact':
         rows = conn.execute('''
@@ -1075,13 +1105,11 @@ def get_duplicates():
         file_ids = [r['id'] for r in rows]
         tags_map = get_tags_for_ids(conn, file_ids)
         conn.close()
-        # Group by sha256
         groups = defaultdict(list)
         for r in rows:
             groups[r['sha256']].append(file_to_dict(r, tags_map.get(r['id'], [])))
         return jsonify({'type': 'exact', 'groups': list(groups.values())})
 
-    # Similar (perceptual) — O(n²) in Python; fine for personal libraries.
     rows = conn.execute(
         '''SELECT f.id, f.original_name, f.phash, f.uploaded_at,
                   f.size, f.mimetype, f.filename, f.folder_id, f.sha256,
@@ -1112,44 +1140,235 @@ def get_duplicates():
 
     return jsonify({'type': 'similar', 'groups': groups})
 
-# ─── Run ──────────────────────────────────────────────────────────────────────
+# ─── Bootstrap: load extensions + init DB ────────────────────────────────────
+#
+# Runs at module import time, which covers every launch mode:
+#   python server.py          (direct)
+#   gunicorn server:app       (WSGI)
+#   waitress-serve server:app (WSGI)
+#
+# Extensions MUST be loaded before init_db() so their on_db_init hooks are
+# already registered when Step 4 of init_db fires.
 
-if __name__ == '__main__':
+def _bootstrap():
+    import sys as _sys
+    # Ensure this module is reachable as 'server' regardless of how it was
+    # launched (e.g. `python server.py` sets __name__=='__main__', so
+    # extensions doing `from server import …` would reimport the file and
+    # create a second, separate _hooks dict — causing hooks to be registered
+    # on a ghost copy that the banner never sees).
+    _sys.modules.setdefault('server', _sys.modules[__name__])
+    from load_extensions import load_extensions
+    load_extensions(app)
     init_db()
 
-    import socket
-    try:
-        import qrcode
-        _qr_available = True
-    except ImportError:
-        _qr_available = False
+_bootstrap()
 
+# ─── Run ──────────────────────────────────────────────────────────────────────
+
+
+def _print_startup_banner():
+    """Print a rich, informative terminal dashboard on server startup."""
+    import socket as _socket
+    import platform
+
+    # ── ANSI colour helpers ───────────────────────────────────────────────────
+    RESET  = '\033[0m'
+    BOLD   = '\033[1m'
+    DIM    = '\033[2m'
+
+    # Foreground colours
+    GREEN  = '\033[32m'
+    YELLOW = '\033[33m'
+    CYAN   = '\033[36m'
+    RED    = '\033[31m'
+    WHITE  = '\033[97m'
+
+    W = 62  # inner width (between the border pipes)
+
+    def _strip_ansi(s):
+        import re
+        return re.sub(r'\033\[[0-9;]*m', '', s)
+
+    def line(content='', pad=True):
+        """Print a full-width box row."""
+        if pad:
+            visible = _strip_ansi(content)
+            spaces  = W - len(visible)
+            print(f'│{content}{" " * max(spaces, 0)}│')
+        else:
+            print(content)
+
+    def sep():
+        print(f'├{"─" * W}┤')
+
+    def top():
+        print(f'┌{"─" * W}┐')
+
+    def bot():
+        print(f'└{"─" * W}┘')
+
+    def center(text, colour=''):
+        visible = _strip_ansi(text)
+        total_pad = W - len(visible)
+        lpad = total_pad // 2
+        rpad = total_pad - lpad
+        print(f'│{" " * lpad}{colour}{text}{RESET if colour else ""}{" " * rpad}│')
+
+    def status_row(label, ok, detail='', warn_detail=''):
+        """Render a feature status row with icon, label and detail."""
+        if ok is True:
+            icon   = f'{GREEN}●{RESET}'
+            status = f'{GREEN}active{RESET}'
+            info   = f'  {DIM}{detail}{RESET}' if detail else ''
+        elif ok is None:  # warning
+            icon   = f'{YELLOW}◐{RESET}'
+            status = f'{YELLOW}warning{RESET}'
+            info   = f'  {DIM}{warn_detail}{RESET}' if warn_detail else ''
+        else:
+            icon   = f'{RED}○{RESET}'
+            status = f'{RED}inactive{RESET}'
+            _msg   = warn_detail or detail
+            info   = f'  {DIM}{_msg}{RESET}' if _msg else ''
+        label_col = f'{icon} {label}'
+        suffix    = f'{status}{info}'
+        visible   = _strip_ansi(label_col) + '  ' + _strip_ansi(suffix)
+        spaces    = W - len(visible)
+        print(f'│{label_col}{"  "}{suffix}{" " * max(spaces, 0)}│')
+
+    # ── Collect runtime info ──────────────────────────────────────────────────
     try:
-        _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
         _s.connect(('8.8.8.8', 80))
         local_ip = _s.getsockname()[0]
         _s.close()
     except Exception:
         local_ip = '127.0.0.1'
 
-    url = f'http://{local_ip}:5000'
+    port        = 5000
+    url_network = f'http://{local_ip}:{port}'
+    url_local   = f'http://localhost:{port}'
+
+    # Disk usage of the uploads folder
+    try:
+        total, used, free = shutil.disk_usage(UPLOAD_FOLDER)
+        upload_dir_size   = sum(
+            os.path.getsize(os.path.join(dp, f))
+            for dp, _, fs in os.walk(UPLOAD_FOLDER) for f in fs
+        )
+        def _fmt(b):
+            for u in ('B', 'KB', 'MB', 'GB', 'TB'):
+                if b < 1024 or u == 'TB':
+                    return f'{b:.1f} {u}'
+                b /= 1024
+        disk_info = f'uploads {_fmt(upload_dir_size)}  •  disk free {_fmt(free)}'
+    except Exception:
+        disk_info = 'disk info unavailable'
+
+    # DB stats
+    try:
+        _conn = get_db()
+        n_files   = _conn.execute('SELECT COUNT(*) FROM files').fetchone()[0]
+        n_folders = _conn.execute('SELECT COUNT(*) FROM folders').fetchone()[0]
+        n_tags    = _conn.execute('SELECT COUNT(*) FROM tags').fetchone()[0]
+        n_rules   = _conn.execute('SELECT COUNT(*) FROM rules').fetchone()[0]
+        _conn.close()
+        db_info = (f'{n_files} files  •  {n_folders} folders  '
+                   f'•  {n_tags} tags  •  {n_rules} rules')
+    except Exception:
+        db_info = 'DB stats unavailable'
+
+    # ffmpeg
+    _ffmpeg_ok = bool(shutil.which('ffmpeg'))
+
+    # Extension hooks registered
+    n_hooks = sum(len(v) for v in _hooks.values())
+
+    # Python version
+    py_ver  = platform.python_version()
+    os_info = f'{platform.system()} {platform.release()}'
+
+    # QR code
+    try:
+        import qrcode as _qrcode
+        _qr_available = True
+    except ImportError:
+        _qr_available = False
+
+    # ── Draw banner ───────────────────────────────────────────────────────────
+    print()
 
     if _qr_available:
-        qr = qrcode.QRCode(border=1)
-        qr.add_data(url)
+        qr = _qrcode.QRCode(border=1)
+        qr.add_data(url_network)
         qr.make(fit=True)
         qr.print_ascii(invert=True)
     else:
-        print("\n  (install 'qrcode' via pip to display the QR code here)")
+        print(f'  {DIM}(pip install qrcode  →  show QR here){RESET}\n')
 
-    print(f'\n✅  LocalFileHub is running')
-    print(f'📱  Scan the QR or open: {url}')
-    print(f'💻  From this PC: http://localhost:5000\n')
+    top()
+    center(f'{BOLD}{WHITE}  LocalFileHub  {RESET}', '')
+    center(f'{DIM}Media server & file manager{RESET}')
+    sep()
 
-    # Print optional-dependency status
+    # Access URLs
+    line(f'  {BOLD}Network {RESET}  {CYAN}{url_network}{RESET}')
+    line(f'  {BOLD}Local   {RESET}  {CYAN}{url_local}{RESET}')
+    sep()
 
-    print(f'🖼️   Thumbnails (Pillow):      {"✅ active – LRU in-memory cache (" + str(THUMB_CACHE_MAX_ENTRIES) + " entries)" if PIL_AVAILABLE else "❌ install Pillow"}')
-    print(f'🔍  Perceptual hash (imagehash): {"✅ active" if IMAGEHASH_AVAILABLE else "❌ install imagehash"}')
-    print(f'🚦  Rate limiter (flask-limiter):{"✅ active" if LIMITER_AVAILABLE else "⚠️  using built-in fallback"}\n')
+    # System info
+    line(f'  {DIM}Python {py_ver}   {os_info}   {datetime.now().strftime("%Y-%m-%d %H:%M")}{RESET}')
+    line(f'  {DIM}{disk_info}{RESET}')
+    line(f'  {DIM}{db_info}{RESET}')
+    sep()
 
+    # Feature matrix
+    line(f'  {BOLD}Features{RESET}')
+    line()
+
+    status_row(
+        f'  Image thumbnails (Pillow)   ',
+        PIL_AVAILABLE,
+        detail=f'LRU cache · {THUMB_CACHE_MAX_ENTRIES} slots · {THUMB_SIZE[0]}px',
+        warn_detail='pip install Pillow',
+    )
+    status_row(
+        f'  Video thumbnails (ffmpeg)   ',
+        _ffmpeg_ok,
+        detail='on-the-fly · no disk storage',
+        warn_detail='install ffmpeg',
+    )
+    status_row(
+        f'  Perceptual hashing          ',
+        IMAGEHASH_AVAILABLE,
+        detail='duplicate detection via pHash',
+        warn_detail='pip install imagehash',
+    )
+    status_row(
+        f'  Rate limiter                ',
+        True if LIMITER_AVAILABLE else None,
+        detail='flask-limiter',
+        warn_detail='built-in fallback active',
+    )
+    status_row(
+        f'  Extension hooks             ',
+        True if n_hooks > 0 else None,
+        detail=f'{n_hooks} handler(s) registered' if n_hooks > 0 else '',
+        warn_detail='no extensions loaded',
+    )
+    status_row(
+        f'  Automation rules            ',
+        True,
+        detail=f'{n_rules} rule(s) in DB',
+    )
+
+    line()
+    sep()
+    center(f'{DIM}Press  Ctrl+C  to stop{RESET}')
+    bot()
+    print()
+
+
+if __name__ == '__main__':
+    _print_startup_banner()
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
