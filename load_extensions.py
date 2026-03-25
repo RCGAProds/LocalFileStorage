@@ -32,10 +32,10 @@ def load_extensions(app):
     plain `import server` without needing relative imports.
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    ext_dir  = os.path.join(base_dir, 'extensions')
+    ext_dir = os.path.join(base_dir, "extensions")
 
     if not os.path.isdir(ext_dir):
-        return   # no extensions folder → nothing to do
+        return  # no extensions folder → nothing to do
 
     # Make sure the project root is on sys.path so extensions can import server
     if base_dir not in sys.path:
@@ -44,22 +44,24 @@ def load_extensions(app):
     loaded = []
     for name in sorted(os.listdir(ext_dir)):
         pkg_path = os.path.join(ext_dir, name)
-        init_py  = os.path.join(pkg_path, '__init__.py')
+        init_py = os.path.join(pkg_path, "__init__.py")
 
         if not os.path.isdir(pkg_path) or not os.path.isfile(init_py):
-            continue   # skip files and dirs without __init__.py
+            continue  # skip files and dirs without __init__.py
 
-        module_name = f'extensions.{name}'
+        module_name = f"extensions.{name}"
         try:
             module = importlib.import_module(module_name)
-            if hasattr(module, 'register'):
+            if hasattr(module, "register"):
                 module.register(app)
                 loaded.append(name)
-                print(f'[EXT] ✅  Loaded extension: {name}')
+                print(f"[EXT] ✅  Loaded extension: {name}")
             else:
-                print(f'[EXT] ⚠️   Extension "{name}" has no register() function — skipped')
+                print(
+                    f'[EXT] ⚠️   Extension "{name}" has no register() function — skipped'
+                )
         except Exception as e:
             print(f'[EXT] ❌  Failed to load extension "{name}": {e}')
 
     if not loaded:
-        print('[EXT] No extensions found.')
+        print("[EXT] No extensions found.")

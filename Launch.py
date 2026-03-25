@@ -23,13 +23,14 @@ import sys
 # ── Hide the console window on Windows ───────────────────────────────────────
 if sys.platform == "win32" and os.environ.get("LAUNCHER_NO_RELAUNCH") != "1":
     import subprocess as _sp
-    _pythonw   = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+
+    _pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
     _this_file = os.path.abspath(__file__)
-    _this_dir  = os.path.dirname(_this_file)
+    _this_dir = os.path.dirname(_this_file)
     if os.path.isfile(_pythonw):
         _env = os.environ.copy()
         _env["LAUNCHER_NO_RELAUNCH"] = "1"
-        _env["LAUNCHER_ROOT"]        = _this_dir
+        _env["LAUNCHER_ROOT"] = _this_dir
         _sp.Popen(
             [_pythonw, _this_file],
             cwd=_this_dir,
@@ -51,50 +52,51 @@ ROOT = os.environ.get("LAUNCHER_ROOT") or os.path.dirname(os.path.abspath(__file
 
 # ── Config ────────────────────────────────────────────────────────────────────
 DEPENDENCIES = [
-    ("flask",         "flask",         True),
-    ("werkzeug",      "werkzeug",      True),
-    ("Pillow",        "PIL",           False),
-    ("imagehash",     "imagehash",     False),
+    ("flask", "flask", True),
+    ("werkzeug", "werkzeug", True),
+    ("Pillow", "PIL", False),
+    ("imagehash", "imagehash", False),
     ("flask-limiter", "flask_limiter", False),
-    ("qrcode",        "qrcode",        False),
+    ("qrcode", "qrcode", False),
+    ("psutil", "psutil", False),
 ]
 PORT = 5000
 
 # ── Palette: Terminal-Luxe ────────────────────────────────────────────────────
 # Deep blacks, phosphor amber, surgical whites.
-BG          = "#080808"
-BG2         = "#0f0f0f"
-BG3         = "#161616"
-BG4         = "#1d1d1d"
-BG5         = "#242424"
+BG = "#080808"
+BG2 = "#0f0f0f"
+BG3 = "#161616"
+BG4 = "#1d1d1d"
+BG5 = "#242424"
 
-AMBER       = "#e8a020"
-AMBER_DIM   = "#7a4a08"
-AMBER_GLOW  = "#f5c060"
+AMBER = "#e8a020"
+AMBER_DIM = "#7a4a08"
+AMBER_GLOW = "#f5c060"
 AMBER_FAINT = "#2a1a04"
 
-GREEN       = "#3dba6e"
-GREEN_DIM   = "#183d28"
-GREEN_GLOW  = "#5edd8e"
+GREEN = "#3dba6e"
+GREEN_DIM = "#183d28"
+GREEN_GLOW = "#5edd8e"
 
-RED         = "#c94040"
-RED_DIM     = "#3d1010"
-RED_GLOW    = "#e05555"
+RED = "#c94040"
+RED_DIM = "#3d1010"
+RED_GLOW = "#e05555"
 
-BLUE        = "#4080c0"
-BLUE_DIM    = "#102040"
-BLUE_GLOW   = "#60a8e8"
+BLUE = "#4080c0"
+BLUE_DIM = "#102040"
+BLUE_GLOW = "#60a8e8"
 
-CYAN        = "#30a8a0"
-CYAN_DIM    = "#0a3030"
+CYAN = "#30a8a0"
+CYAN_DIM = "#0a3030"
 
-WHITE       = "#f0ece0"
-GREY        = "#888070"
-GREY_DIM    = "#3a3630"
-GREY_FAINT  = "#1e1c18"
+WHITE = "#f0ece0"
+GREY = "#888070"
+GREY_DIM = "#3a3630"
+GREY_FAINT = "#1e1c18"
 
-BORDER      = "#2a2820"
-BORDER2     = "#3a3628"
+BORDER = "#2a2820"
+BORDER2 = "#3a3628"
 
 # ── Lines to suppress from the server log ────────────────────────────────────
 # Covers: [STATUS] protocol lines, all Flask/Werkzeug startup noise,
@@ -103,7 +105,6 @@ BORDER2     = "#3a3628"
 _SUPPRESS_FRAGMENTS = [
     # Internal protocol — never shown raw
     "[STATUS]",
-
     # Flask / Werkzeug startup noise
     "Serving Flask app",
     "Debug mode:",
@@ -116,10 +117,15 @@ _SUPPRESS_FRAGMENTS = [
     " * Running on",
     "werkzeug",
     "Environment:",
-
     # server.py CLI banner — box-drawing characters
-    "\u250c", "\u2510", "\u2514", "\u2518", "\u251c", "\u2524", "\u2500", "\u2502",
-
+    "\u250c",
+    "\u2510",
+    "\u2514",
+    "\u2518",
+    "\u251c",
+    "\u2524",
+    "\u2500",
+    "\u2502",
     # server.py CLI banner — content rows
     "LocalFileHub",
     "Media server",
@@ -140,19 +146,19 @@ _SUPPRESS_FRAGMENTS = [
     "Automation rules",
     "Press  Ctrl+C",
     "pip install qrcode",
-
     # ANSI escape sequences
     "\033[",
-
     # QR code ASCII art block characters
-    "\u2588", "\u2580", "\u2584",
+    "\u2588",
+    "\u2580",
+    "\u2584",
 ]
 
 # Log level constants
-LOG_ALL      = 0
+LOG_ALL = 0
 LOG_REQUESTS = 1
 LOG_WARNINGS = 2
-LOG_ERRORS   = 3
+LOG_ERRORS = 3
 
 _LEVEL_LABELS = ["ALL", "REQUESTS", "WARN", "ERRORS"]
 
@@ -160,6 +166,7 @@ _LEVEL_LABELS = ["ALL", "REQUESTS", "WARN", "ERRORS"]
 # ─────────────────────────────────────────────────────────────────────────────
 # Process termination helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _kill_process_tree(proc):
     if proc is None:
@@ -170,17 +177,21 @@ def _kill_process_tree(proc):
             _cf = subprocess.CREATE_NO_WINDOW
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
-                creationflags=_cf, capture_output=True,
+                creationflags=_cf,
+                capture_output=True,
             )
             return
         except Exception:
             pass
         try:
             import psutil
+
             parent = psutil.Process(pid)
             for child in parent.children(recursive=True):
-                try: child.kill()
-                except Exception: pass
+                try:
+                    child.kill()
+                except Exception:
+                    pass
             parent.kill()
             return
         except Exception:
@@ -191,6 +202,7 @@ def _kill_process_tree(proc):
             pass
     else:
         import signal
+
         try:
             os.killpg(os.getpgid(pid), signal.SIGTERM)
         except Exception:
@@ -218,7 +230,9 @@ def _kill_port(port: int):
             _cf = subprocess.CREATE_NO_WINDOW
             result = subprocess.run(
                 ["netstat", "-ano", "-p", "TCP"],
-                capture_output=True, text=True, creationflags=_cf,
+                capture_output=True,
+                text=True,
+                creationflags=_cf,
             )
             for line in result.stdout.splitlines():
                 if f":{port}" in line and "LISTENING" in line:
@@ -227,22 +241,27 @@ def _kill_port(port: int):
                     if pid.isdigit():
                         subprocess.run(
                             ["taskkill", "/F", "/T", "/PID", pid],
-                            creationflags=_cf, capture_output=True,
+                            creationflags=_cf,
+                            capture_output=True,
                         )
         except Exception:
             pass
     else:
         try:
             import signal
+
             result = subprocess.run(
                 ["lsof", "-ti", f"tcp:{port}"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             for pid_str in result.stdout.split():
                 pid_str = pid_str.strip()
                 if pid_str.isdigit():
-                    try: os.kill(int(pid_str), signal.SIGKILL)
-                    except Exception: pass
+                    try:
+                        os.kill(int(pid_str), signal.SIGKILL)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -250,6 +269,7 @@ def _kill_port(port: int):
 # ─────────────────────────────────────────────────────────────────────────────
 # Dependency helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def check_dependencies():
     missing_req, missing_opt = [], []
@@ -267,7 +287,9 @@ def install_packages(packages, log_fn=print):
     _cf = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet"] + pip_names,
-        capture_output=True, text=True, creationflags=_cf,
+        capture_output=True,
+        text=True,
+        creationflags=_cf,
     )
     if result.returncode != 0:
         log_fn(f"pip error: {result.stderr.strip()}")
@@ -279,6 +301,7 @@ def install_packages(packages, log_fn=print):
 # ─────────────────────────────────────────────────────────────────────────────
 # Network / QR helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_local_ip():
     try:
@@ -294,6 +317,7 @@ def get_local_ip():
 def _qr_matrix(data: str):
     try:
         import qrcode as _qr
+
         qr = _qr.QRCode(border=1)
         qr.add_data(data)
         qr.make(fit=True)
@@ -308,9 +332,12 @@ def draw_qr(canvas, url, size=160):
     matrix = _qr_matrix(url)
     if matrix is None:
         canvas.create_text(
-            size // 2, size // 2,
+            size // 2,
+            size // 2,
             text="pip install qrcode\nto enable QR",
-            fill=GREY, font=("Courier", 7), justify="center",
+            fill=GREY,
+            font=("Courier", 7),
+            justify="center",
         )
         return
     rows = len(matrix)
@@ -319,25 +346,28 @@ def draw_qr(canvas, url, size=160):
         for c, v in enumerate(row):
             x0, y0 = c * cell, r * cell
             color = AMBER_GLOW if v else BG3
-            canvas.create_rectangle(x0, y0, x0 + cell, y0 + cell,
-                                    fill=color, outline="")
+            canvas.create_rectangle(
+                x0, y0, x0 + cell, y0 + cell, fill=color, outline=""
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Backup helper
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _run_backup(log_fn):
     import shutil as _shutil, datetime
+
     uploads_src = os.path.join(ROOT, "uploads")
-    db_src      = os.path.join(ROOT, "database.db")
+    db_src = os.path.join(ROOT, "database.db")
     backups_dir = os.path.join(ROOT, "backups")
 
     if not os.path.isdir(uploads_src):
         log_fn("ERROR  uploads/ folder not found", "error")
         return False
 
-    ts  = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
     dst = os.path.join(backups_dir, f"backup_{ts}")
     os.makedirs(dst, exist_ok=True)
 
@@ -353,8 +383,11 @@ def _run_backup(log_fn):
         log_fn("SKIP   database.db not found", "dim")
 
     all_b = sorted(
-        [d for d in os.listdir(backups_dir)
-         if os.path.isdir(os.path.join(backups_dir, d)) and d.startswith("backup_")],
+        [
+            d
+            for d in os.listdir(backups_dir)
+            if os.path.isdir(os.path.join(backups_dir, d)) and d.startswith("backup_")
+        ],
         reverse=True,
     )
     for old in all_b[10:]:
@@ -370,6 +403,7 @@ def _run_backup(log_fn):
 # Formatting helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _fmt_bytes(b):
     try:
         b = int(b)
@@ -382,11 +416,12 @@ def _fmt_bytes(b):
 
 
 import re as _re
-_ANSI_RE = _re.compile(r'\033\[[0-9;]*[mKHJABCDsuhrfnlp]')
+
+_ANSI_RE = _re.compile(r"\033\[[0-9;]*[mKHJABCDsuhrfnlp]")
 
 
 def _strip_ansi(s: str) -> str:
-    return _ANSI_RE.sub('', s)
+    return _ANSI_RE.sub("", s)
 
 
 def _classify_line(line: str):
@@ -398,7 +433,7 @@ def _classify_line(line: str):
     """
     # Strip ANSI escape codes before any matching — catches banner lines that
     # reach here despite PYTHONIOENCODING=utf-8 / NO_COLOR being set.
-    line     = _strip_ansi(line)
+    line = _strip_ansi(line)
     stripped = line.strip()
     if not stripped:
         return "", False, ""
@@ -427,10 +462,10 @@ def _classify_line(line: str):
                 stripped,
             )
             if m:
-                verb   = m.group(1).ljust(6)
-                path   = m.group(2)
+                verb = m.group(1).ljust(6)
+                path = m.group(2)
                 status = m.group(3)
-                s_int  = int(status)
+                s_int = int(status)
                 if s_int >= 500:
                     tag = "error"
                 elif s_int >= 400:
@@ -460,17 +495,21 @@ def _classify_line(line: str):
 # Pulsing activity oscilloscope
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ActivityBar:
-    W    = 200
-    H    = 28
+    W = 200
+    H = 28
     COLS = 50
 
     def __init__(self, parent):
         self._samples = [0.0] * self.COLS
-        self._decay   = 0.0
-        self.canvas   = tk.Canvas(
-            parent, width=self.W, height=self.H,
-            bg=BG3, highlightthickness=0,
+        self._decay = 0.0
+        self.canvas = tk.Canvas(
+            parent,
+            width=self.W,
+            height=self.H,
+            bg=BG3,
+            highlightthickness=0,
         )
         self._draw()
         self._tick()
@@ -489,7 +528,7 @@ class ActivityBar:
         c = self.canvas
         c.delete("all")
         c.create_rectangle(0, 0, self.W, self.H, fill=BG3, outline="")
-        mid   = self.H / 2
+        mid = self.H / 2
         col_w = self.W / self.COLS
         c.create_line(0, mid, self.W, mid, fill=GREY_DIM, width=1)
         pts = []
@@ -499,23 +538,30 @@ class ActivityBar:
             pts.extend([x, y])
         if len(pts) >= 4:
             c.create_line(*pts, fill=AMBER_DIM, width=3, smooth=True)
-            c.create_line(*pts, fill=AMBER,     width=1, smooth=True)
+            c.create_line(*pts, fill=AMBER, width=1, smooth=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stat tile widget
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class StatTile:
     def __init__(self, parent, label: str, var: tk.StringVar, accent=AMBER):
         self.frame = tk.Frame(parent, bg=BG3, padx=12, pady=8)
         tk.Label(
-            self.frame, text=label,
-            bg=BG3, fg=GREY, font=("Courier", 7),
+            self.frame,
+            text=label,
+            bg=BG3,
+            fg=GREY,
+            font=("Courier", 7),
         ).pack(anchor="w")
         tk.Label(
-            self.frame, textvariable=var,
-            bg=BG3, fg=accent, font=("Courier", 14, "bold"),
+            self.frame,
+            textvariable=var,
+            bg=BG3,
+            fg=accent,
+            font=("Courier", 14, "bold"),
         ).pack(anchor="w")
 
 
@@ -523,27 +569,28 @@ class StatTile:
 # Main launcher GUI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class LauncherApp:
 
     def __init__(self, root: tk.Tk):
-        self.root            = root
-        self.server_proc     = None
-        self._running        = False
+        self.root = root
+        self.server_proc = None
+        self._running = False
         self._backup_running = False
-        self._network_url    = ""
-        self._log_filter     = LOG_ALL
-        self._request_count  = 0
+        self._network_url = ""
+        self._log_filter = LOG_ALL
+        self._request_count = 0
 
         # All log entries as (tag, ts, msg, level) tuples
         self._log_entries: list = []
 
         # Live stats
-        self._stat_files   = tk.StringVar(value="—")
+        self._stat_files = tk.StringVar(value="—")
         self._stat_folders = tk.StringVar(value="—")
-        self._stat_tags    = tk.StringVar(value="—")
+        self._stat_tags = tk.StringVar(value="—")
         self._stat_uploads = tk.StringVar(value="—")
-        self._stat_free    = tk.StringVar(value="—")
-        self._stat_reqs    = tk.StringVar(value="0")
+        self._stat_free = tk.StringVar(value="—")
+        self._stat_reqs = tk.StringVar(value="0")
 
         self._feat_vars = {}
 
@@ -575,17 +622,26 @@ class LauncherApp:
         left_hdr.pack(side="left")
 
         tk.Label(
-            left_hdr, text="LOCAL",
-            bg=BG, fg=AMBER, font=("Courier", 22, "bold"),
+            left_hdr,
+            text="LOCAL",
+            bg=BG,
+            fg=AMBER,
+            font=("Courier", 22, "bold"),
         ).pack(side="left")
         tk.Label(
-            left_hdr, text="FILEHUB",
-            bg=BG, fg=WHITE, font=("Courier", 22, "bold"),
+            left_hdr,
+            text="FILEHUB",
+            bg=BG,
+            fg=WHITE,
+            font=("Courier", 22, "bold"),
         ).pack(side="left")
 
         self.version_lbl = tk.Label(
-            left_hdr, text="",
-            bg=BG, fg=GREY, font=("Courier", 8),
+            left_hdr,
+            text="",
+            bg=BG,
+            fg=GREY,
+            font=("Courier", 8),
         )
         self.version_lbl.pack(side="left", padx=(10, 0), pady=(8, 0))
 
@@ -593,10 +649,16 @@ class LauncherApp:
         rh.pack(side="right", anchor="center")
 
         self._open_btn = self._mk_btn(
-            rh, "OPEN BROWSER",
-            bg=BG4, fg=GREY, active_bg=BG5,
-            command=self._open_browser, state="disabled",
-            padx=10, pady=5, font_size=8,
+            rh,
+            "OPEN BROWSER",
+            bg=BG4,
+            fg=GREY,
+            active_bg=BG5,
+            command=self._open_browser,
+            state="disabled",
+            padx=10,
+            pady=5,
+            font_size=8,
         )
         self._open_btn.pack(side="right")
 
@@ -608,14 +670,20 @@ class LauncherApp:
         sl.pack(side="left")
 
         self._status_dot = tk.Label(
-            sl, text="◉",
-            bg=BG3, fg=AMBER_DIM, font=("Courier", 13),
+            sl,
+            text="◉",
+            bg=BG3,
+            fg=AMBER_DIM,
+            font=("Courier", 13),
         )
         self._status_dot.pack(side="left")
 
         self._status_lbl = tk.Label(
-            sl, text="INITIALISING",
-            bg=BG3, fg=GREY, font=("Courier", 10, "bold"),
+            sl,
+            text="INITIALISING",
+            bg=BG3,
+            fg=GREY,
+            font=("Courier", 10, "bold"),
         )
         self._status_lbl.pack(side="left", padx=(8, 0))
 
@@ -623,8 +691,11 @@ class LauncherApp:
         sr_right.pack(side="right", padx=(0, 6))
 
         tk.Label(
-            sr_right, text="ACTIVITY",
-            bg=BG3, fg=GREY_DIM, font=("Courier", 6),
+            sr_right,
+            text="ACTIVITY",
+            bg=BG3,
+            fg=GREY_DIM,
+            font=("Courier", 6),
         ).pack(anchor="e")
         self._activity = ActivityBar(sr_right)
         self._activity.canvas.pack()
@@ -644,48 +715,62 @@ class LauncherApp:
         url_frame.pack(fill="x")
 
         tk.Label(
-            url_frame, text="ACCESS POINTS",
-            bg=BG3, fg=GREY, font=("Courier", 7),
+            url_frame,
+            text="ACCESS POINTS",
+            bg=BG3,
+            fg=GREY,
+            font=("Courier", 7),
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
-        tk.Label(url_frame, text="NET ", bg=BG3, fg=GREY_DIM,
-                 font=("Courier", 8)).grid(row=1, column=0, sticky="w")
+        tk.Label(url_frame, text="NET ", bg=BG3, fg=GREY_DIM, font=("Courier", 8)).grid(
+            row=1, column=0, sticky="w"
+        )
         self.url_network = tk.Label(
-            url_frame, text="—",
-            bg=BG3, fg=AMBER, font=("Courier", 10, "bold"), cursor="hand2",
+            url_frame,
+            text="—",
+            bg=BG3,
+            fg=AMBER,
+            font=("Courier", 10, "bold"),
+            cursor="hand2",
         )
         self.url_network.grid(row=1, column=1, sticky="w", padx=(8, 0))
-        self.url_network.bind("<Button-1>",
-                              lambda e: self._open_url(self._network_url))
+        self.url_network.bind("<Button-1>", lambda e: self._open_url(self._network_url))
 
-        tk.Label(url_frame, text="LCL ", bg=BG3, fg=GREY_DIM,
-                 font=("Courier", 8)).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        tk.Label(url_frame, text="LCL ", bg=BG3, fg=GREY_DIM, font=("Courier", 8)).grid(
+            row=2, column=0, sticky="w", pady=(4, 0)
+        )
         self.url_local = tk.Label(
-            url_frame, text="—",
-            bg=BG3, fg=AMBER, font=("Courier", 10, "bold"), cursor="hand2",
+            url_frame,
+            text="—",
+            bg=BG3,
+            fg=AMBER,
+            font=("Courier", 10, "bold"),
+            cursor="hand2",
         )
         self.url_local.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(4, 0))
-        self.url_local.bind("<Button-1>",
-                            lambda e: self._open_url(f"http://localhost:{PORT}"))
+        self.url_local.bind(
+            "<Button-1>", lambda e: self._open_url(f"http://localhost:{PORT}")
+        )
 
         # Stats grid
         stats_outer = tk.Frame(left_col, bg=BG, pady=0)
         stats_outer.pack(fill="x", pady=(8, 0))
 
         stat_defs = [
-            ("FILES",     self._stat_files,   AMBER),
-            ("FOLDERS",   self._stat_folders, AMBER),
-            ("TAGS",      self._stat_tags,    AMBER),
-            ("UPLOADS",   self._stat_uploads, CYAN),
-            ("DISK FREE", self._stat_free,    CYAN),
-            ("REQUESTS",  self._stat_reqs,    GREEN),
+            ("FILES", self._stat_files, AMBER),
+            ("FOLDERS", self._stat_folders, AMBER),
+            ("TAGS", self._stat_tags, AMBER),
+            ("UPLOADS", self._stat_uploads, CYAN),
+            ("DISK FREE", self._stat_free, CYAN),
+            ("REQUESTS", self._stat_reqs, GREEN),
         ]
         for i, (lbl, var, accent) in enumerate(stat_defs):
             col = i % 3
             row = i // 3
             tile = StatTile(stats_outer, lbl, var, accent)
             tile.frame.grid(
-                row=row, column=col,
+                row=row,
+                column=col,
                 padx=(0 if col == 0 else 4, 0),
                 pady=(0 if row == 0 else 4, 0),
                 sticky="nsew",
@@ -698,19 +783,22 @@ class LauncherApp:
         pills_outer.pack(fill="x", pady=(10, 0))
 
         tk.Label(
-            pills_outer, text="MODULES",
-            bg=BG, fg=GREY_DIM, font=("Courier", 7),
+            pills_outer,
+            text="MODULES",
+            bg=BG,
+            fg=GREY_DIM,
+            font=("Courier", 7),
         ).pack(anchor="w", pady=(0, 4))
 
         pills_row = tk.Frame(pills_outer, bg=BG)
         pills_row.pack(anchor="w")
 
         feat_defs = [
-            ("pillow",    "PILLOW"),
+            ("pillow", "PILLOW"),
             ("imagehash", "PHASH"),
-            ("limiter",   "LIMITER"),
-            ("ffmpeg",    "FFMPEG"),
-            ("hooks",     "HOOKS"),
+            ("limiter", "LIMITER"),
+            ("ffmpeg", "FFMPEG"),
+            ("hooks", "HOOKS"),
         ]
         for name, label in feat_defs:
             var = tk.StringVar(value="?")
@@ -718,24 +806,36 @@ class LauncherApp:
             pill = tk.Frame(pills_row, bg=BG4, padx=8, pady=4)
             pill.pack(side="left", padx=(0, 5))
             dot_lbl = tk.Label(
-                pill, textvariable=var,
-                bg=BG4, fg=GREY_DIM, font=("Courier", 8, "bold"),
+                pill,
+                textvariable=var,
+                bg=BG4,
+                fg=GREY_DIM,
+                font=("Courier", 8, "bold"),
             )
             dot_lbl.pack(side="left")
             self._feat_vars[f"_{name}_dot"] = dot_lbl
             tk.Label(
-                pill, text=f" {label}",
-                bg=BG4, fg=GREY, font=("Courier", 8),
+                pill,
+                text=f" {label}",
+                bg=BG4,
+                fg=GREY,
+                font=("Courier", 8),
             ).pack(side="left")
 
         # QR code
         tk.Label(
-            right_col, text="SCAN TO OPEN",
-            bg=BG, fg=GREY_DIM, font=("Courier", 7),
+            right_col,
+            text="SCAN TO OPEN",
+            bg=BG,
+            fg=GREY_DIM,
+            font=("Courier", 7),
         ).pack(pady=(0, 4))
         self.qr_canvas = tk.Canvas(
-            right_col, width=160, height=160,
-            bg=BG3, highlightthickness=1,
+            right_col,
+            width=160,
+            height=160,
+            bg=BG3,
+            highlightthickness=1,
             highlightbackground=BORDER2,
         )
         self.qr_canvas.pack()
@@ -748,8 +848,11 @@ class LauncherApp:
         log_hdr.pack(fill="x")
 
         tk.Label(
-            log_hdr, text="SERVER LOG",
-            bg=BG, fg=GREY, font=("Courier", 7, "bold"),
+            log_hdr,
+            text="SERVER LOG",
+            bg=BG,
+            fg=GREY,
+            font=("Courier", 7, "bold"),
         ).pack(side="left")
 
         # Filter buttons
@@ -758,25 +861,36 @@ class LauncherApp:
         filter_row.pack(side="left", padx=(14, 0))
 
         for lvl, lbl in enumerate(_LEVEL_LABELS):
-            is_active = (lvl == LOG_ALL)
+            is_active = lvl == LOG_ALL
             btn = tk.Button(
-                filter_row, text=lbl,
+                filter_row,
+                text=lbl,
                 bg=AMBER_DIM if is_active else BG4,
                 fg=AMBER_GLOW if is_active else GREY,
-                activebackground=BG5, activeforeground=AMBER,
-                font=("Courier", 7), relief="flat",
-                padx=7, pady=2, cursor="hand2",
+                activebackground=BG5,
+                activeforeground=AMBER,
+                font=("Courier", 7),
+                relief="flat",
+                padx=7,
+                pady=2,
+                cursor="hand2",
                 command=lambda l=lvl: self._set_filter(l),
             )
             btn.pack(side="left", padx=(0, 3))
             self._filter_btns[lvl] = btn
 
         clear_btn = tk.Button(
-            log_hdr, text="CLEAR",
-            bg=BG, fg=GREY_DIM, activebackground=BG3,
+            log_hdr,
+            text="CLEAR",
+            bg=BG,
+            fg=GREY_DIM,
+            activebackground=BG3,
             activeforeground=GREY,
-            font=("Courier", 7), relief="flat",
-            padx=7, pady=2, cursor="hand2",
+            font=("Courier", 7),
+            relief="flat",
+            padx=7,
+            pady=2,
+            cursor="hand2",
             command=self._clear_log,
         )
         clear_btn.pack(side="right")
@@ -789,15 +903,19 @@ class LauncherApp:
         log_inner.pack(fill="both", expand=True)
 
         scrollbar = tk.Scrollbar(
-            log_inner, bg=BG3, troughcolor=BG2,
-            activebackground=GREY_DIM, width=8,
+            log_inner,
+            bg=BG3,
+            troughcolor=BG2,
+            activebackground=GREY_DIM,
+            width=8,
         )
         scrollbar.pack(side="right", fill="y")
 
         self.log_text = tk.Text(
             log_inner,
             height=10,
-            bg=BG2, fg=GREY,
+            bg=BG2,
+            fg=GREY,
             font=("Courier", 8),
             relief="flat",
             state="disabled",
@@ -806,19 +924,21 @@ class LauncherApp:
             yscrollcommand=scrollbar.set,
             selectbackground=BG4,
             selectforeground=WHITE,
-            padx=10, pady=6,
-            spacing1=1, spacing3=1,
+            padx=10,
+            pady=6,
+            spacing1=1,
+            spacing3=1,
         )
         self.log_text.pack(fill="both", expand=True)
         scrollbar.config(command=self.log_text.yview)
 
-        self.log_text.tag_config("error",   foreground=RED_GLOW)
-        self.log_text.tag_config("warn",    foreground=AMBER)
-        self.log_text.tag_config("ext",     foreground=BLUE_GLOW)
-        self.log_text.tag_config("ok",      foreground=GREEN_GLOW)
+        self.log_text.tag_config("error", foreground=RED_GLOW)
+        self.log_text.tag_config("warn", foreground=AMBER)
+        self.log_text.tag_config("ext", foreground=BLUE_GLOW)
+        self.log_text.tag_config("ok", foreground=GREEN_GLOW)
         self.log_text.tag_config("request", foreground=CYAN)
-        self.log_text.tag_config("dim",     foreground=GREY_DIM)
-        self.log_text.tag_config("ts",      foreground=GREY_DIM)
+        self.log_text.tag_config("dim", foreground=GREY_DIM)
+        self.log_text.tag_config("ts", foreground=GREY_DIM)
 
         # ── Divider ───────────────────────────────────────────────────────────
         tk.Frame(r, bg=BORDER, height=1).pack(fill="x", padx=24, pady=(6, 0))
@@ -828,18 +948,28 @@ class LauncherApp:
         ctrl.pack(fill="x")
 
         self.stop_btn = self._mk_btn(
-            ctrl, "■  STOP",
-            bg=RED_DIM, fg=RED, active_bg="#2a0a0a",
-            command=self._stop_server, state="disabled",
-            padx=18, pady=9,
+            ctrl,
+            "■  STOP",
+            bg=RED_DIM,
+            fg=RED,
+            active_bg="#2a0a0a",
+            command=self._stop_server,
+            state="disabled",
+            padx=18,
+            pady=9,
         )
         self.stop_btn.pack(side="right")
 
         self.start_btn = self._mk_btn(
-            ctrl, "▶  START",
-            bg=GREEN_DIM, fg=GREEN, active_bg="#0a2018",
-            command=self._start_server, state="disabled",
-            padx=18, pady=9,
+            ctrl,
+            "▶  START",
+            bg=GREEN_DIM,
+            fg=GREEN,
+            active_bg="#0a2018",
+            command=self._start_server,
+            state="disabled",
+            padx=18,
+            pady=9,
         )
         self.start_btn.pack(side="right", padx=(0, 8))
 
@@ -848,16 +978,23 @@ class LauncherApp:
         bk.pack(fill="x", pady=(0, 16))
 
         self.backup_btn = self._mk_btn(
-            bk, "▣  BACKUP",
-            bg=BLUE_DIM, fg=BLUE, active_bg="#0a1828",
+            bk,
+            "▣  BACKUP",
+            bg=BLUE_DIM,
+            fg=BLUE,
+            active_bg="#0a1828",
             command=self._run_backup,
-            padx=18, pady=9,
+            padx=18,
+            pady=9,
         )
         self.backup_btn.pack(side="left")
 
         self._backup_lbl = tk.Label(
-            bk, text="",
-            bg=BG, fg=GREY, font=("Courier", 8),
+            bk,
+            text="",
+            bg=BG,
+            fg=GREY,
+            font=("Courier", 8),
         )
         self._backup_lbl.pack(side="left", padx=(12, 0))
 
@@ -865,15 +1002,34 @@ class LauncherApp:
 
     # ── Button factory ────────────────────────────────────────────────────────
 
-    def _mk_btn(self, parent, text, bg, fg, active_bg,
-                command, state="normal", padx=14, pady=7, font_size=9):
+    def _mk_btn(
+        self,
+        parent,
+        text,
+        bg,
+        fg,
+        active_bg,
+        command,
+        state="normal",
+        padx=14,
+        pady=7,
+        font_size=9,
+    ):
         return tk.Button(
-            parent, text=text,
-            bg=bg, fg=fg,
-            activebackground=active_bg, activeforeground=fg,
+            parent,
+            text=text,
+            bg=bg,
+            fg=fg,
+            activebackground=active_bg,
+            activeforeground=fg,
             font=("Courier", font_size, "bold"),
-            relief="flat", padx=padx, pady=pady,
-            cursor="hand2", command=command, state=state, bd=0,
+            relief="flat",
+            padx=padx,
+            pady=pady,
+            cursor="hand2",
+            command=command,
+            state=state,
+            bd=0,
         )
 
     # ── Status helpers ────────────────────────────────────────────────────────
@@ -886,12 +1042,12 @@ class LauncherApp:
         """CRT screen power-on flicker effect."""
         frames = [
             (AMBER_FAINT, "STARTING"),
-            (AMBER_DIM,   "STARTING"),
-            (AMBER,       "STARTING ."),
-            (AMBER_DIM,   "STARTING ."),
-            (AMBER,       "STARTING .."),
-            (AMBER_DIM,   "STARTING .."),
-            (AMBER_GLOW,  "STARTING ..."),
+            (AMBER_DIM, "STARTING"),
+            (AMBER, "STARTING ."),
+            (AMBER_DIM, "STARTING ."),
+            (AMBER, "STARTING .."),
+            (AMBER_DIM, "STARTING .."),
+            (AMBER_GLOW, "STARTING ..."),
         ]
 
         def _step(i=0):
@@ -915,7 +1071,8 @@ class LauncherApp:
 
     def _log(self, msg: str, tag: str = ""):
         import datetime
-        ts  = datetime.datetime.now().strftime("%H:%M:%S")
+
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
         lvl = self._tag_to_level(tag)
         self._log_entries.append((tag, ts, msg, lvl))
         if len(self._log_entries) > 1000:
@@ -943,7 +1100,7 @@ class LauncherApp:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
-        for (tag, ts, msg, lvl) in self._log_entries:
+        for tag, ts, msg, lvl in self._log_entries:
             if lvl >= level:
                 self._append_log_line(tag, ts, msg)
 
@@ -971,6 +1128,7 @@ class LauncherApp:
         if not url:
             return
         import webbrowser
+
         webbrowser.open(url)
 
     def _open_browser(self):
@@ -1067,16 +1225,16 @@ class LauncherApp:
 
         server_path = os.path.join(ROOT, "server.py")
         env = os.environ.copy()
-        env["NO_COLOR"]                 = "1"
-        env["TERM"]                     = "dumb"
-        env["PYTHONIOENCODING"]         = "utf-8"
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
+        env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONLEGACYWINDOWSSTDIO"] = "0"
-        env["PYTHONUNBUFFERED"]         = "1"
-        env["LOCALFILEHUB_LAUNCHER"]    = "1"
-        env["LAUNCHER_ROOT"]            = ROOT
+        env["PYTHONUNBUFFERED"] = "1"
+        env["LOCALFILEHUB_LAUNCHER"] = "1"
+        env["LAUNCHER_ROOT"] = ROOT
 
         if sys.platform == "win32":
-            exe_dir    = os.path.dirname(sys.executable)
+            exe_dir = os.path.dirname(sys.executable)
             python_exe = os.path.join(exe_dir, "python.exe")
             if not os.path.isfile(python_exe):
                 python_exe = sys.executable
@@ -1091,7 +1249,8 @@ class LauncherApp:
         try:
             self.server_proc = subprocess.Popen(
                 [python_exe, server_path],
-                cwd=ROOT, env=env,
+                cwd=ROOT,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1128,7 +1287,7 @@ class LauncherApp:
 
         proc = self.server_proc
         self.server_proc = None
-        self._running    = False
+        self._running = False
 
         _kill_process_tree(proc)
         try:
@@ -1160,7 +1319,7 @@ class LauncherApp:
 
     def _parse_status(self, line: str):
         try:
-            kv          = line[len("[STATUS]"):].strip()
+            kv = line[len("[STATUS]") :].strip()
             key, _, val = kv.partition("=")
             key = key.strip()
             val = val.strip()
@@ -1184,17 +1343,17 @@ class LauncherApp:
             if feat in self._feat_vars:
                 if feat == "hooks":
                     active = int(val) > 0
-                    label  = f"{val}x" if active else "—"
+                    label = f"{val}x" if active else "—"
                 else:
                     active = val == "1"
-                    label  = "ON" if active else "—"
+                    label = "ON" if active else "—"
                 self._update_feat_pill(feat, active, label)
 
     def _poll_server(self):
         if not self._running:
             return
         if self.server_proc and self.server_proc.poll() is not None:
-            self._running    = False
+            self._running = False
             self.server_proc = None
             self.root.after(0, self._on_server_died)
         else:
@@ -1220,7 +1379,7 @@ class LauncherApp:
 
     def _backup_worker(self):
         try:
-            ok  = _run_backup(self._log_ts)
+            ok = _run_backup(self._log_ts)
             msg = "Backup complete." if ok else "Backup failed — see log."
             self.root.after(0, self._backup_done, ok, msg)
         except Exception as e:
@@ -1242,12 +1401,14 @@ class LauncherApp:
 
     def _on_close(self):
         if self._backup_running:
-            if not messagebox.askyesno("Backup in progress",
-                                        "A backup is running.\nQuit anyway?"):
+            if not messagebox.askyesno(
+                "Backup in progress", "A backup is running.\nQuit anyway?"
+            ):
                 return
         if self._running:
-            if not messagebox.askyesno("Quit",
-                                        "The server is still running.\nStop it and quit?"):
+            if not messagebox.askyesno(
+                "Quit", "The server is still running.\nStop it and quit?"
+            ):
                 return
             self._stop_server()
 
@@ -1262,9 +1423,11 @@ class LauncherApp:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     if sys.version_info < (3, 8):
         import tkinter as _tk
+
         _tk.Tk().withdraw()
         messagebox.showerror(
             "Python version",
