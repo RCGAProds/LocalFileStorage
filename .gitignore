@@ -1,5 +1,5 @@
-extensions/*
 uploads/*
-__pycache__/*
 *.db
 /.vscode
+__pycache__/*
+extensions/__pycache__/*
