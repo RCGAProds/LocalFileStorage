@@ -979,6 +979,7 @@ def batch_delete_files():
             os.remove(filepath)
         delete_thumbnail(row['filename'])
         conn.execute('DELETE FROM files WHERE id = ?', (fid,))
+        _fire_hook('on_image_deleted', fid, row['filename'], conn)
         deleted += 1
 
     conn.execute('DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM file_tags)')
@@ -1007,6 +1008,7 @@ def delete_file(file_id):
     conn.execute('DELETE FROM files WHERE id = ?', (file_id,))
     conn.execute('DELETE FROM tags WHERE id NOT IN (SELECT tag_id FROM file_tags)')
     conn.commit()
+    _fire_hook('on_image_deleted', file_id, row['filename'], conn)
     conn.close()
     return jsonify({'ok': True})
 
@@ -1023,6 +1025,7 @@ def download_file(file_id):
     conn.close()
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    _fire_hook('on_image_downloaded', file_id, row['original_name'], None)
     directory = folder_disk_path(row['folder_name']) if row['folder_name'] else UPLOAD_FOLDER
     return send_from_directory(
         directory, row['filename'],
