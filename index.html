@@ -2587,7 +2587,70 @@
         totalFiles: 0,
         isFetching: false,
         allLoaded: false,
+
+        lightboxContextIds: null,
       };
+
+      // ── Lightbox context registry ───────────────────────────────────────────
+      window._lightboxProviders = {};
+
+      window._registerLightboxProvider = function (tabId, getIds, isActive) {
+        window._lightboxProviders[tabId] = {
+          getIds: getIds,
+          isActive: isActive,
+        };
+      };
+
+      window._resolveActiveImageIds = function () {
+        const providerIds = Object.entries(window._lightboxProviders)
+          .find(([, p]) => p.isActive())?.[1]
+          ?.getIds?.();
+        if (providerIds && providerIds.length > 0) return providerIds;
+        return state.files
+          .filter((f) => !f._origin || f._origin === 'files')
+          .filter((f) => isImage(f.mimetype))
+          .map((f) => f.id);
+      };
+
+      // ── Register built-in providers ─────────────────────────────────────────
+      window._registerLightboxProvider(
+        'files',
+        function () {
+          return state.files
+            .filter((f) => !f._origin || f._origin === 'files')
+            .filter((f) => isImage(f.mimetype))
+            .map((f) => f.id);
+        },
+        function () {
+          const filesPage = document.getElementById('page-files');
+          return !!(filesPage && filesPage.classList.contains('active'));
+        },
+      );
+
+      window._registerLightboxProvider(
+        'folders',
+        function () {
+          const detailEl = document.getElementById('detail-files-list');
+          if (!detailEl) return [];
+          return Array.from(detailEl.querySelectorAll('.file-card[data-id]'))
+            .map((c) => parseInt(c.dataset.id))
+            .filter(Boolean)
+            .filter((id) => {
+              const f = state.files.find((f) => f.id === id);
+              return f && isImage(f.mimetype);
+            });
+        },
+        function () {
+          const detail = document.getElementById('folders-detail');
+          const foldersPage = document.getElementById('page-folders');
+          return !!(
+            detail &&
+            detail.classList.contains('active') &&
+            foldersPage &&
+            foldersPage.classList.contains('active')
+          );
+        },
+      );
 
       let searchTimer;
       const IMAGE_TYPES = [
@@ -2750,6 +2813,10 @@
           const data = await api('/api/files?' + p);
           const newFiles = data.files;
           const total = data.total;
+
+          newFiles.forEach((f) => {
+            f._origin = 'files';
+          });
 
           state.files = [...state.files, ...newFiles];
           state.totalFiles = total;
@@ -3648,9 +3715,6 @@
       }
 
       // ── File navigation helpers ────────────────────────────────────────────
-
-      // Returns the source file list for navigation depending on active context:
-      // folder detail view → only files in that folder; global view → state.files
       function _navSourceFiles() {
         const detailActive = document
           .getElementById('folders-detail')
@@ -3666,13 +3730,12 @@
             .map((id) => state.files.find((f) => f.id === id))
             .filter(Boolean);
         }
-        return state.files;
+        return state.files.filter((f) => !f._origin || f._origin === 'files');
       }
 
       function _visibleImageIds() {
-        return _navSourceFiles()
-          .filter((f) => isImage(f.mimetype))
-          .map((f) => f.id);
+        const source = _navSourceFiles();
+        return source.filter((f) => isImage(f.mimetype)).map((f) => f.id);
       }
 
       function _visibleViewerIds() {
@@ -3685,17 +3748,25 @@
       }
 
       function _updateLightboxNav(currentId) {
-        const ids = _visibleImageIds();
+        const ids = state.lightboxContextIds;
+        if (!ids || ids.length === 0) return;
+
         const idx = ids.indexOf(currentId);
-        document
-          .getElementById('lightbox-nav-prev')
-          .classList.toggle('hidden', idx <= 0);
-        document
-          .getElementById('lightbox-nav-next')
-          .classList.toggle('hidden', idx >= ids.length - 1);
+
+        const prevBtn = document.getElementById('lightbox-nav-prev');
+        const nextBtn = document.getElementById('lightbox-nav-next');
         const counter = document.getElementById('lightbox-counter');
-        counter.textContent =
-          ids.length > 1 ? `${idx + 1} / ${ids.length}` : '';
+
+        if (idx === -1 || ids.length <= 1) {
+          prevBtn.classList.add('hidden');
+          nextBtn.classList.add('hidden');
+          counter.textContent = '';
+          return;
+        }
+
+        prevBtn.classList.toggle('hidden', idx === 0);
+        nextBtn.classList.toggle('hidden', idx === ids.length - 1);
+        counter.textContent = `${idx + 1} / ${ids.length}`;
       }
 
       function _updateViewerNav(currentId) {
@@ -3809,13 +3880,9 @@
         );
       }
 
-      function navigateLightbox(dir, axis) {
-        const ids = _visibleImageIds();
-        const idx = ids.indexOf(state.editFileId);
-        const next = idx + dir;
-        if (next < 0 || next >= ids.length) return;
-        const fullImg = document.getElementById('lightbox-img');
+      function _getSwipeClasses(dir, axis) {
         let outClass, inClass;
+
         if (axis === 'y') {
           outClass = dir > 0 ? 'swipe-out-up' : 'swipe-out-down';
           inClass = dir > 0 ? 'swipe-in-up' : 'swipe-in-down';
@@ -3823,8 +3890,24 @@
           outClass = dir > 0 ? 'swipe-out-left' : 'swipe-out-right';
           inClass = dir > 0 ? 'swipe-in-left' : 'swipe-in-right';
         }
+        return { outClass, inClass };
+      }
 
+      function navigateLightbox(dir, axis) {
+        const ids = state.lightboxContextIds;
+        if (!ids || ids.length === 0) return;
+
+        console.log(ids);
+
+        const idx = ids.indexOf(state.editFileId);
+        const next = idx + dir;
+
+        if (next < 0 || next >= ids.length) return;
+
+        const fullImg = document.getElementById('lightbox-img');
+        const { outClass, inClass } = _getSwipeClasses(dir, axis);
         const isVisible = fullImg.classList.contains('loaded');
+
         if (isVisible) {
           fullImg.classList.add(outClass);
           let done = false;
@@ -3832,13 +3915,12 @@
             if (done) return;
             done = true;
             fullImg.classList.remove(outClass);
-            openLightbox(ids[next], inClass);
+            openLightbox(ids[next], inClass, ids);
           };
           fullImg.addEventListener('animationend', proceed, { once: true });
-          // Fallback: if animationend never fires (hidden element, etc.)
           setTimeout(proceed, 280);
         } else {
-          openLightbox(ids[next], inClass);
+          openLightbox(ids[next], inClass, ids);
         }
       }
 
@@ -3852,12 +3934,18 @@
 
       // ── Lightbox ───────────────────────────────────────────────────────────
 
-      function openLightbox(fileId, animClass) {
+      function openLightbox(fileId, animClass, customIds = null) {
         const id = fileId != null ? fileId : state.editFileId;
         const f = state.files.find((x) => x.id === id);
         if (!f || !isImage(f.mimetype)) return;
 
         state.editFileId = id;
+
+        if (customIds !== null) {
+          state.lightboxContextIds = customIds;
+        } else {
+          state.lightboxContextIds = window._resolveActiveImageIds();
+        }
 
         const lb = document.getElementById('lightbox');
         const fullImg = document.getElementById('lightbox-img');
@@ -3941,6 +4029,7 @@
       }
 
       function closeLightbox() {
+        state.lightboxContextIds = null;
         const lb = document.getElementById('lightbox');
         lb.classList.remove('open');
         document.body.style.overflow = '';
@@ -4276,6 +4365,23 @@
 
       // ── Tab nav ────────────────────────────────────────────────────────────
       function switchTab(name) {
+        state.lightboxContextIds = null;
+
+        if (name !== 'folders') {
+          document.getElementById('folders-main').style.display = 'block';
+          document.getElementById('folders-detail').classList.remove('active');
+          detailFolderId = null;
+        }
+
+        Object.entries(_extTabLeaveCallbacks).forEach(([tabId, fns]) => {
+          if (tabId !== name)
+            fns.forEach((fn) => {
+              try {
+                fn();
+              } catch (e) {}
+            });
+        });
+
         document
           .querySelectorAll('.tab')
           .forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
@@ -4284,7 +4390,7 @@
           .forEach((p) =>
             p.classList.toggle('active', p.id === 'page-' + name),
           );
-        // Fire any on-activate callbacks registered by extensions
+
         (_extTabCallbacks[name] || []).forEach((fn) => {
           try {
             fn();
@@ -4434,13 +4540,18 @@
         el.appendChild(fragment);
         toObserveDetail.forEach((img) => detailImgObserver.observe(img));
 
-        // Merge into state.files so openEdit() can find them
         files.forEach((f) => {
-          if (!state.files.find((x) => x.id === f.id)) state.files.push(f);
+          if (!state.files.find((x) => x.id === f.id)) {
+            f._origin = 'folders';
+            state.files.push(f);
+            state._folderDetailIds = state._folderDetailIds || new Set();
+            state._folderDetailIds.add(f.id);
+          }
         });
       }
 
       function closeFolderDetail() {
+        state.lightboxContextIds = null;
         document.getElementById('folders-main').style.display = 'block';
         document.getElementById('folders-detail').classList.remove('active');
         detailFolderId = null;
@@ -4515,25 +4626,20 @@
       }
 
       // ── Extension tab-activate callbacks ───────────────────────────────────
-      // Extensions register here via window._extRegisterTabCallback(id, fn)
       const _extTabCallbacks = {};
+      const _extTabLeaveCallbacks = {};
 
       window._extRegisterTabCallback = function (tabId, fn) {
         if (!_extTabCallbacks[tabId]) _extTabCallbacks[tabId] = [];
         _extTabCallbacks[tabId].push(fn);
       };
 
+      window._extRegisterTabLeaveCallback = function (tabId, fn) {
+        if (!_extTabLeaveCallbacks[tabId]) _extTabLeaveCallbacks[tabId] = [];
+        _extTabLeaveCallbacks[tabId].push(fn);
+      };
+
       // ── Frontend extension loader ───────────────────────────────────────────
-      //
-      // Fetches /api/extensions/frontend and, for each registered extension:
-      //   1. Injects a <style> block with the extension's CSS into <head>
-      //   2. Appends a tab button to #tabs-bar
-      //   3. Appends a <div class="page" id="page-{id}"> to #app
-      //   4. Injects overlay_html just before <!-- EXT:OVERLAYS -->
-      //   5. Patches buildFileCard to append card_actions to image cards
-      //   6. Injects edit_modal_btn after <!-- EXT:EDIT-MODAL-BTNS -->
-      //   7. Executes the extension's JS block in the global scope
-      //
       async function initExtensions() {
         let extensions;
         try {
